@@ -3,8 +3,13 @@ package com.example.silverageassistant.ui.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.silverageassistant.data.middleserver.ElderBindingRequest
+import com.example.silverageassistant.data.middleserver.FamilyOnboardingRequest
+import com.example.silverageassistant.data.middleserver.MiddleServerRequestException
+import com.example.silverageassistant.data.middleserver.OnboardingMiddleServerRepository
 import com.example.silverageassistant.data.onboarding.OnboardingProfileStore
 import java.io.IOException
+import java.time.Instant
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +21,7 @@ import kotlinx.coroutines.launch
 
 class OnboardingViewModel(
     private val profileStore: OnboardingProfileStore? = null,
+    private val middleServerRepository: OnboardingMiddleServerRepository? = null,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(
         OnboardingUiState(isRestoringProfiles = profileStore != null),
@@ -42,6 +48,7 @@ class OnboardingViewModel(
                     bindingCode = value.filter(Char::isDigit).take(6),
                 ),
                 elderErrors = ElderSetupErrors(),
+                networkMessage = null,
             )
         }
     }
@@ -66,28 +73,66 @@ class OnboardingViewModel(
 
     fun updateEmergencyContact(value: Boolean) = updateFamilyDraft { copy(emergencyContact = value) }
 
-    fun submitElderSetup(): Boolean {
+    fun submitElderSetup(onCompleted: () -> Unit = {}): Boolean {
+        if (_uiState.value.isSubmitting) return false
         val errors = OnboardingValidator.validateElder(_uiState.value.elderDraft)
+        val draft = _uiState.value.elderDraft
+        val hasBindingCredentials = draft.bindingCode.isNotBlank() &&
+            draft.familyMobileNumber.isNotBlank()
         _uiState.update { state ->
             state.copy(
                 elderErrors = errors,
                 elderBindingStatus = if (
                     !errors.hasErrors &&
-                    state.elderDraft.bindingCode.isNotBlank() &&
-                    state.elderDraft.familyMobileNumber.isNotBlank()
+                    hasBindingCredentials
                 ) {
                     BindingPreparationStatus.PendingJointVerification
                 } else {
                     BindingPreparationStatus.NotPrepared
                 },
+                networkMessage = null,
             )
         }
-        if (!errors.hasErrors) scheduleElderPersistence(delayMillis = 0)
-        return !errors.hasErrors
+        if (errors.hasErrors) return false
+        scheduleElderPersistence(delayMillis = 0)
+        if (!hasBindingCredentials || middleServerRepository == null) {
+            onCompleted()
+            return true
+        }
+
+        _uiState.update { it.copy(isSubmitting = true) }
+        viewModelScope.launch {
+            try {
+                val result = middleServerRepository.bindElderDevice(
+                    ElderBindingRequest(
+                        displayName = draft.displayName.trim(),
+                        familyMobileNumber = draft.familyMobileNumber,
+                        bindingCode = draft.bindingCode,
+                        sharingConsent = draft.sharingConsent,
+                    ),
+                )
+                _uiState.update {
+                    it.copy(
+                        isSubmitting = false,
+                        elderBindingStatus = BindingPreparationStatus.Bound,
+                        familyMobileMasked = result.familyMobileMasked,
+                        lastSyncedAt = Instant.now().toString(),
+                    )
+                }
+                onCompleted()
+            } catch (error: MiddleServerRequestException) {
+                showNetworkFailure(error.userMessage)
+            } catch (_: Exception) {
+                showNetworkFailure("绑定信息保存失败，请稍后重试。")
+            }
+        }
+        return true
     }
 
-    fun submitFamilySetup(): Boolean {
+    fun submitFamilySetup(onCompleted: () -> Unit = {}): Boolean {
+        if (_uiState.value.isSubmitting) return false
         val errors = OnboardingValidator.validateFamily(_uiState.value.familyDraft)
+        val draft = _uiState.value.familyDraft
         _uiState.update { state ->
             state.copy(
                 familyErrors = errors,
@@ -96,10 +141,47 @@ class OnboardingViewModel(
                 } else {
                     BindingPreparationStatus.AwaitingCodeGeneration
                 },
+                networkMessage = null,
             )
         }
-        if (!errors.hasErrors) scheduleFamilyPersistence(delayMillis = 0)
-        return !errors.hasErrors
+        if (errors.hasErrors) return false
+        scheduleFamilyPersistence(delayMillis = 0)
+        if (middleServerRepository == null) {
+            onCompleted()
+            return true
+        }
+
+        _uiState.update { it.copy(isSubmitting = true) }
+        viewModelScope.launch {
+            try {
+                val result = middleServerRepository.registerFamilyAndCreateBindingCode(
+                    FamilyOnboardingRequest(
+                        displayName = draft.displayName.trim(),
+                        mobileNumber = draft.mobileNumber,
+                        elderDisplayName = draft.elderDisplayName.trim(),
+                        elderMobileNumber = draft.elderMobileNumber,
+                        relationship = requireNotNull(draft.relationship).name.uppercase(),
+                        emergencyContact = draft.emergencyContact,
+                    ),
+                )
+                _uiState.update {
+                    it.copy(
+                        isSubmitting = false,
+                        familyBindingStatus = BindingPreparationStatus.CodeGenerated,
+                        familyBindingCode = result.bindingCode,
+                        familyBindingCodeExpiresAt = result.bindingCodeExpiresAt,
+                        familyMobileMasked = result.familyMobileMasked,
+                        lastSyncedAt = Instant.now().toString(),
+                    )
+                }
+                onCompleted()
+            } catch (error: MiddleServerRequestException) {
+                showNetworkFailure(error.userMessage)
+            } catch (_: Exception) {
+                showNetworkFailure("中台凭证保存失败，请稍后重试。")
+            }
+        }
+        return true
     }
 
     private fun restoreProfiles(store: OnboardingProfileStore) {
@@ -143,6 +225,7 @@ class OnboardingViewModel(
             state.copy(
                 elderDraft = state.elderDraft.transform(),
                 elderErrors = ElderSetupErrors(),
+                networkMessage = null,
                 persistenceMessage = null,
             )
         }
@@ -154,6 +237,7 @@ class OnboardingViewModel(
             state.copy(
                 familyDraft = state.familyDraft.transform(),
                 familyErrors = FamilySetupErrors(),
+                networkMessage = null,
                 persistenceMessage = null,
             )
         }
@@ -205,13 +289,23 @@ class OnboardingViewModel(
         }
     }
 
+    private fun showNetworkFailure(message: String) {
+        _uiState.update {
+            it.copy(
+                isSubmitting = false,
+                networkMessage = message,
+            )
+        }
+    }
+
     class Factory(
         private val profileStore: OnboardingProfileStore,
+        private val middleServerRepository: OnboardingMiddleServerRepository? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(OnboardingViewModel::class.java))
-            return OnboardingViewModel(profileStore) as T
+            return OnboardingViewModel(profileStore, middleServerRepository) as T
         }
     }
 

@@ -105,10 +105,21 @@ UI 必须显示“实时连接中/已断开”和“最后同步时间”。
 - 只有服务端验证账号、老人档案、设备和权限后，客户端才可显示“已绑定”；
 - Debug 构建会把双方称呼、手机号、关系、紧急联系人选项和共享确认写入应用私有 DataStore，避免重复测试输入；该文件不参与云备份或设备迁移，Release 构建不启用。
 - 绑定码、验证码、access/refresh token 和 device credential 不进入这份测试 DataStore；任何手机号均不得写日志。
+- 家属提交有效资料后，Android 直接调用家属注册接口，再创建老人档案并生成绑定码；注册请求不包含 `verification_token`。老人提交“家属手机号 + 绑定码”后调用设备绑定接口。
+- 家属端和老人端已在本地模拟器通过 `http://58.199.163.98:8765` 完成注册、生成绑定码和设备绑定联通验证。
+- access/refresh token 与 device credential 使用 Android Keystore 生成的 AES-GCM 密钥加密保存，凭证文件和随机应用设备 ID 均排除云备份与设备迁移。
 
 ## 6. 本地中台联调地址
 
-- 宿主机命令行和服务端测试使用 `http://127.0.0.1:8000`；
-- Android 官方模拟器内的 `127.0.0.1` 指向模拟器自身，访问宿主机服务应使用 `http://10.0.2.2:8000`；
+- 当前开发机中台地址配置为 `http://58.199.163.98:8765`，只写入被 Git 忽略的 `AndroidAgent/dev.properties`；仓库提供 `dev.properties.example` 说明字段。
+- FastAPI 必须监听 `0.0.0.0:8765` 才能通过开发机网卡地址访问；若只监听 `127.0.0.1`，模拟器无法通过 `58.199.163.98` 连接。
+- Windows 防火墙只应在可信开发网络范围内允许 TCP 8765，完成测试后关闭。
 - 本地 HTTP 明文访问只能在 Debug 网络配置中开放，Release 必须使用 HTTPS；
-- 当前 Android 网络 Repository 尚未接入，不能因为表单已持久化就显示注册、生成绑定码或绑定成功。
+- Release 构建不注入开发中台地址。
+
+Windows PowerShell 联调启动示例（先停止旧的 127.0.0.1 监听进程）：
+
+```powershell
+cd MiddleServer
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8765
+```

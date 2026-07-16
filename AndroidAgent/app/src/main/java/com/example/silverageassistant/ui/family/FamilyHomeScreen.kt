@@ -58,6 +58,9 @@ private data class FamilyFeatureAction(
 fun FamilyHomeScreen(
     profile: FamilySetupDraft,
     bindingStatus: BindingPreparationStatus,
+    bindingCode: String?,
+    bindingCodeExpiresAt: String?,
+    lastSyncedAt: String?,
     onEditProfile: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -96,10 +99,15 @@ fun FamilyHomeScreen(
                 )
             }
             item {
-                ConnectionStatusCard(bindingStatus = bindingStatus)
+                ConnectionStatusCard(
+                    bindingStatus = bindingStatus,
+                    bindingCode = bindingCode,
+                    bindingCodeExpiresAt = bindingCodeExpiresAt,
+                    lastSyncedAt = lastSyncedAt,
+                )
             }
             item {
-                ElderProfileCard(profile = profile)
+                ElderProfileCard(profile = profile, bindingStatus = bindingStatus)
             }
             if (unavailableMessage != null) {
                 item {
@@ -125,7 +133,7 @@ fun FamilyHomeScreen(
                 FamilyFeatureCard(
                     action = action,
                     onClick = {
-                        unavailableMessage = "尚未连接中台，${action.title}暂不可用。"
+                        unavailableMessage = "${action.title}接口尚未进入当前开发阶段。"
                     },
                 )
             }
@@ -135,32 +143,61 @@ fun FamilyHomeScreen(
 }
 
 @Composable
-private fun ConnectionStatusCard(bindingStatus: BindingPreparationStatus) {
+private fun ConnectionStatusCard(
+    bindingStatus: BindingPreparationStatus,
+    bindingCode: String?,
+    bindingCodeExpiresAt: String?,
+    lastSyncedAt: String?,
+) {
+    val isConnected = bindingStatus == BindingPreparationStatus.CodeGenerated ||
+        bindingStatus == BindingPreparationStatus.Bound
     val bindingText = when (bindingStatus) {
         BindingPreparationStatus.NotPrepared -> "尚未准备绑定"
         BindingPreparationStatus.AwaitingCodeGeneration -> "资料已准备，等待中台注册并生成绑定码"
         BindingPreparationStatus.PendingJointVerification -> "等待中台校验家属手机号和绑定码"
+        BindingPreparationStatus.CodeGenerated -> "绑定码已生成，请在老人手机上填写"
+        BindingPreparationStatus.Bound -> "老人设备已完成绑定"
     }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .semantics { contentDescription = "连接状态，尚未连接中台，最后同步，从未同步" },
+            .semantics {
+                contentDescription = if (isConnected) {
+                    "连接状态，已连接中台，绑定码已生成"
+                } else {
+                    "连接状态，尚未连接中台"
+                }
+            },
         color = MaterialTheme.colorScheme.tertiaryContainer,
         shape = MaterialTheme.shapes.large,
     ) {
         Column(modifier = Modifier.padding(ElderSpacing.medium)) {
-            Text("尚未连接中台", style = MaterialTheme.typography.titleLarge)
+            Text(
+                if (isConnected) "已连接中台" else "尚未连接中台",
+                style = MaterialTheme.typography.titleLarge,
+            )
             Text(bindingText, style = MaterialTheme.typography.bodyLarge)
-            if (bindingStatus == BindingPreparationStatus.AwaitingCodeGeneration) {
-                Text("绑定码：待中台生成", style = MaterialTheme.typography.bodyLarge)
+            if (bindingStatus == BindingPreparationStatus.CodeGenerated && bindingCode != null) {
+                Text("绑定码：$bindingCode", style = MaterialTheme.typography.headlineMedium)
+                if (bindingCodeExpiresAt != null) {
+                    Text("请尽快使用，过期后需重新生成。", style = MaterialTheme.typography.bodyMedium)
+                }
+            } else if (bindingStatus == BindingPreparationStatus.AwaitingCodeGeneration) {
+                Text("绑定码：正在生成", style = MaterialTheme.typography.bodyLarge)
             }
-            Text("最后同步：从未同步", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                if (lastSyncedAt == null) "最后同步：从未同步" else "最后同步：刚刚",
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
     }
 }
 
 @Composable
-private fun ElderProfileCard(profile: FamilySetupDraft) {
+private fun ElderProfileCard(
+    profile: FamilySetupDraft,
+    bindingStatus: BindingPreparationStatus,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(ElderSpacing.medium),
@@ -183,7 +220,11 @@ private fun ElderProfileCard(profile: FamilySetupDraft) {
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 Text(
-                    text = "绑定状态：等待中台确认",
+                    text = when (bindingStatus) {
+                        BindingPreparationStatus.CodeGenerated -> "绑定状态：等待老人输入绑定码"
+                        BindingPreparationStatus.Bound -> "绑定状态：已绑定"
+                        else -> "绑定状态：等待中台确认"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

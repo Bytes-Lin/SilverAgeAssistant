@@ -43,15 +43,15 @@ fun FamilySetupRoute(
         draft = uiState.familyDraft,
         errors = uiState.familyErrors,
         persistenceMessage = uiState.persistenceMessage,
+        networkMessage = uiState.networkMessage,
+        isSubmitting = uiState.isSubmitting,
         onNameChange = viewModel::updateFamilyName,
         onMobileNumberChange = viewModel::updateMobileNumber,
         onElderNameChange = viewModel::updateElderDisplayName,
         onElderMobileNumberChange = viewModel::updateFamilyElderMobileNumber,
         onRelationshipChange = viewModel::updateRelationship,
         onEmergencyContactChange = viewModel::updateEmergencyContact,
-        onContinue = {
-            if (viewModel.submitFamilySetup()) onCompleted()
-        },
+        onContinue = { viewModel.submitFamilySetup(onCompleted) },
         onBack = onBack,
     )
 }
@@ -61,6 +61,8 @@ fun FamilySetupScreen(
     draft: FamilySetupDraft,
     errors: FamilySetupErrors,
     persistenceMessage: String?,
+    networkMessage: String?,
+    isSubmitting: Boolean,
     onNameChange: (String) -> Unit,
     onMobileNumberChange: (String) -> Unit,
     onElderNameChange: (String) -> Unit,
@@ -93,6 +95,13 @@ fun FamilySetupScreen(
                     Text(
                         text = persistenceMessage,
                         style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (networkMessage != null) {
+                    Text(
+                        text = networkMessage,
+                        style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
@@ -199,12 +208,16 @@ fun FamilySetupScreen(
             }
             item {
                 Text(
-                    text = "家属和老人手机号属于敏感信息。本阶段不会上传或写入日志；中台接入时再通过安全接口提交。",
+                    text = "手机号只用于注册、创建老人档案和绑定，不会写入日志。开发测试暂用 HTTP，正式版本必须使用 HTTPS。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(modifier = Modifier.height(ElderSpacing.medium))
-                LargeActionButton(text = "保存并进入家属模式", onClick = onContinue)
+                LargeActionButton(
+                    text = if (isSubmitting) "正在注册并生成绑定码…" else "保存并进入家属模式",
+                    onClick = onContinue,
+                    enabled = !isSubmitting,
+                )
                 Spacer(modifier = Modifier.height(ElderSpacing.large))
             }
         }

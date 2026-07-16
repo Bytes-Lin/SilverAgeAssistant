@@ -6,8 +6,12 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="datastore/onboarding_test_profiles.preferences_pb" />
+        <exclude domain="sharedpref" path="silverage_secure_credentials.xml" />
+        <exclude domain="sharedpref" path="silverage_device_identity.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="datastore/onboarding_test_profiles.preferences_pb" />
+        <exclude domain="sharedpref" path="silverage_secure_credentials.xml" />
+        <exclude domain="sharedpref" path="silverage_device_identity.xml" />
     </device-transfer>
 </data-extraction-rules>

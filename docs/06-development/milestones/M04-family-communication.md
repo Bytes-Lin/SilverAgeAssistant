@@ -1,6 +1,6 @@
 # MILESTONE 04：家属通信与 FastAPI
 
-当前状态：进行中。Android 老人端和家属端基础 UI 已完成，中台已交付家属注册与老人设备绑定首版，Android 网络层联调尚未开始。
+当前状态：进行中。Android 已接入中台家属注册、老人档案、绑定码和老人设备绑定链路；家属端与老人端已在本地模拟器通过 `58.199.163.98:8765` 完成在线联通验证。
 
 ## Android 前置 UI（已完成）
 
@@ -12,12 +12,15 @@
 - [x] 中台注册、绑定码和手机号联合校验交付需求；
 - [x] Debug 测试用基础资料 DataStore 持久化（排除绑定码和凭证）；
 - [ ] 生产角色默认值和正式初始化状态持久化；
-- [ ] 正式绑定请求/响应 DTO 与 Repository；
+- [x] 绑定请求/响应模型与可替换 Repository；
+- [x] Debug 中台地址配置和仅 Debug 明文 HTTP 放行；
+- [x] Android Keystore + AES-GCM 加密保存家属令牌和 device credential；
+- [x] 模拟器在线完成家属注册、生成绑定码和老人绑定全链路；
 
 中台首版约束：单进程 FastAPI + SQLite，不引入 PostgreSQL、Redis、`.env.example`、`infra/` 或数据库 Docker 依赖。
 
 - [x] FastAPI 工程与迁移；
-- [x] 家属注册和开发阶段手机号验证令牌；
+- [x] 家属直接注册（轻量联调版不接短信验证）；
 - [x] 老人档案和绑定码；
 - [x] 设备凭证；
 - [x] 绑定查询、撤销与主体权限过滤；

@@ -47,6 +47,26 @@ class OnboardingValidatorTest {
     }
 
     @Test
+    fun invalidMobile_usesShortElevenDigitPrompt() {
+        val elderErrors = OnboardingValidator.validateElder(
+            ElderSetupDraft(displayName = "王阿姨", familyMobileNumber = "123"),
+        )
+        val familyErrors = OnboardingValidator.validateFamily(
+            FamilySetupDraft(
+                displayName = "小林",
+                mobileNumber = "123",
+                elderDisplayName = "王阿姨",
+                elderMobileNumber = "456",
+                relationship = FamilyRelationship.Child,
+            ),
+        )
+
+        assertEquals("请输入11位手机号", elderErrors.familyMobileNumber)
+        assertEquals("请输入11位手机号", familyErrors.mobileNumber)
+        assertEquals("请输入11位手机号", familyErrors.elderMobileNumber)
+    }
+
+    @Test
     fun elderBindingCode_mustBeSixDigits() {
         val errors = OnboardingValidator.validateElder(
             ElderSetupDraft(

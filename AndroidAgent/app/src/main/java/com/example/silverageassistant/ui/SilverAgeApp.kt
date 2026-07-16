@@ -93,6 +93,9 @@ fun SilverAgeApp(
             FamilyHomeScreen(
                 profile = onboardingState.familyDraft,
                 bindingStatus = onboardingState.familyBindingStatus,
+                bindingCode = onboardingState.familyBindingCode,
+                bindingCodeExpiresAt = onboardingState.familyBindingCodeExpiresAt,
+                lastSyncedAt = onboardingState.lastSyncedAt,
                 onEditProfile = { navController.navigateOnce(AppDestination.FamilySetup) },
             )
         }

@@ -41,13 +41,13 @@ fun ElderSetupRoute(
         draft = uiState.elderDraft,
         errors = uiState.elderErrors,
         persistenceMessage = uiState.persistenceMessage,
+        networkMessage = uiState.networkMessage,
+        isSubmitting = uiState.isSubmitting,
         onNameChange = viewModel::updateElderName,
         onFamilyMobileNumberChange = viewModel::updateElderFamilyMobileNumber,
         onBindingCodeChange = viewModel::updateBindingCode,
         onSharingConsentChange = viewModel::updateSharingConsent,
-        onContinue = {
-            if (viewModel.submitElderSetup()) onCompleted()
-        },
+        onContinue = { viewModel.submitElderSetup(onCompleted) },
         onBack = onBack,
     )
 }
@@ -57,6 +57,8 @@ fun ElderSetupScreen(
     draft: ElderSetupDraft,
     errors: ElderSetupErrors,
     persistenceMessage: String?,
+    networkMessage: String?,
+    isSubmitting: Boolean,
     onNameChange: (String) -> Unit,
     onFamilyMobileNumberChange: (String) -> Unit,
     onBindingCodeChange: (String) -> Unit,
@@ -87,6 +89,13 @@ fun ElderSetupScreen(
                     Text(
                         text = persistenceMessage,
                         style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (networkMessage != null) {
+                    Text(
+                        text = networkMessage,
+                        style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
@@ -173,12 +182,16 @@ fun ElderSetupScreen(
             }
             item {
                 Text(
-                    text = "家人手机号属于敏感信息。本阶段不会上传或写入日志；中台接入后只用于绑定校验。",
+                    text = "家人手机号只在提交绑定时发送给中台校验，不会写入日志。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(modifier = Modifier.height(ElderSpacing.medium))
-                LargeActionButton(text = "保存并进入老人模式", onClick = onContinue)
+                LargeActionButton(
+                    text = if (isSubmitting) "正在校验绑定信息…" else "保存并进入老人模式",
+                    onClick = onContinue,
+                    enabled = !isSubmitting,
+                )
                 Spacer(modifier = Modifier.height(ElderSpacing.large))
             }
         }

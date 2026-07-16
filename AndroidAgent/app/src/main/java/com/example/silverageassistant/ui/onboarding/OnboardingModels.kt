@@ -21,6 +21,8 @@ enum class BindingPreparationStatus {
     NotPrepared,
     AwaitingCodeGeneration,
     PendingJointVerification,
+    CodeGenerated,
+    Bound,
 }
 
 data class ElderSetupDraft(
@@ -70,6 +72,12 @@ data class OnboardingUiState(
     val elderBindingStatus: BindingPreparationStatus = BindingPreparationStatus.NotPrepared,
     val familyBindingStatus: BindingPreparationStatus = BindingPreparationStatus.NotPrepared,
     val isRestoringProfiles: Boolean = false,
+    val isSubmitting: Boolean = false,
+    val networkMessage: String? = null,
+    val familyBindingCode: String? = null,
+    val familyBindingCodeExpiresAt: String? = null,
+    val familyMobileMasked: String? = null,
+    val lastSyncedAt: String? = null,
     val persistenceMessage: String? = null,
 )
 
@@ -88,7 +96,7 @@ object OnboardingValidator {
             },
             familyMobileNumber = when {
                 hasBindingCode && !hasFamilyMobile -> "请填写家人手机号"
-                hasFamilyMobile && !isValidMobile(familyMobile) -> "请输入11位中国大陆家人手机号"
+                hasFamilyMobile && !isValidMobile(familyMobile) -> "请输入11位手机号"
                 else -> null
             },
             bindingCode = when {
@@ -118,7 +126,7 @@ object OnboardingValidator {
             },
             mobileNumber = when {
                 mobile.isBlank() -> "请填写手机号"
-                !isValidMobile(mobile) -> "请输入11位中国大陆手机号"
+                !isValidMobile(mobile) -> "请输入11位手机号"
                 else -> null
             },
             elderDisplayName = when {
@@ -128,7 +136,7 @@ object OnboardingValidator {
             },
             elderMobileNumber = when {
                 elderMobile.isBlank() -> "请填写老人手机号"
-                !isValidMobile(elderMobile) -> "请输入11位中国大陆老人手机号"
+                !isValidMobile(elderMobile) -> "请输入11位手机号"
                 else -> null
             },
             relationship = if (draft.relationship == null) "请选择与老人的关系" else null,

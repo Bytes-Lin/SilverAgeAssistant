@@ -1,7 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+val developmentProperties = Properties().apply {
+    val file = rootProject.file("dev.properties")
+    if (file.exists()) file.inputStream().use(::load)
+}
+
+fun buildConfigString(value: String): String =
+    "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
     namespace = "com.example.silverageassistant"
@@ -22,7 +32,20 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField(
+                "String",
+                "MIDDLE_SERVER_BASE_URL",
+                buildConfigString(
+                    developmentProperties.getProperty(
+                        "middleServerBaseUrl",
+                        "http://58.199.163.98:8765",
+                    ),
+                ),
+            )
+        }
         release {
+            buildConfigField("String", "MIDDLE_SERVER_BASE_URL", "\"\"")
             optimization {
                 enable = false
             }
@@ -33,6 +56,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 }

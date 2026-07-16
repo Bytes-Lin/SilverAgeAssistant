@@ -1,0 +1,2 @@
+# Copy this file to dev.properties. dev.properties is ignored by Git.
+middleServerBaseUrl=http://58.199.163.98:8765
