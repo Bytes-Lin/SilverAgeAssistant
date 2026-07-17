@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -20,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -37,8 +39,12 @@ fun ReminderRoute(
     viewModel: ReminderViewModel = viewModel(),
 ) {
     val reminders by viewModel.reminders.collectAsState()
+    val syncState by viewModel.syncState.collectAsState()
+    LaunchedEffect(viewModel) { viewModel.syncRemoteCommands() }
     ReminderScreen(
         reminders = reminders,
+        syncState = syncState,
+        onRefresh = viewModel::syncRemoteCommands,
         onCompleted = viewModel::markCompleted,
         onSnooze = viewModel::snooze,
         onContactFamily = onContactFamily,
@@ -54,6 +60,8 @@ fun ReminderScreen(
     onContactFamily: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    syncState: ReminderSyncState = ReminderSyncState(),
+    onRefresh: () -> Unit = {},
 ) {
     ElderScreenScaffold(title = "今日提醒", onBack = onBack, modifier = modifier) { paddingValues ->
         LazyColumn(
@@ -67,6 +75,28 @@ fun ReminderScreen(
                 Text(
                     text = "今天有 ${reminders.size} 条提醒",
                     style = MaterialTheme.typography.headlineMedium,
+                )
+            }
+            if (syncState.message != null) {
+                item {
+                    Text(
+                        text = syncState.message,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (syncState.isError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+            item {
+                LargeActionButton(
+                    text = if (syncState.isSyncing) "正在同步" else "接收家人新提醒",
+                    icon = Icons.Rounded.Refresh,
+                    enabled = !syncState.isSyncing,
+                    outlined = true,
+                    onClick = onRefresh,
                 )
             }
             items(reminders, key = { it.id }) { reminder ->
@@ -99,6 +129,16 @@ private fun ReminderCard(
         ReminderStatus.Completed -> "已确认完成"
         ReminderStatus.Snoozed -> "已设置稍后提醒"
     }
+    val containerColor = when (reminder.status) {
+        ReminderStatus.Pending -> MaterialTheme.colorScheme.surface
+        ReminderStatus.Snoozed -> MaterialTheme.colorScheme.tertiaryContainer
+        ReminderStatus.Completed -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val statusColor = when (reminder.status) {
+        ReminderStatus.Pending -> MaterialTheme.colorScheme.primary
+        ReminderStatus.Snoozed -> MaterialTheme.colorScheme.onTertiaryContainer
+        ReminderStatus.Completed -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -106,11 +146,7 @@ private fun ReminderCard(
                 contentDescription = "${reminder.time}，${reminder.title}，$statusText"
             },
         colors = CardDefaults.cardColors(
-            containerColor = if (reminder.status == ReminderStatus.Pending) {
-                MaterialTheme.colorScheme.surface
-            } else {
-                MaterialTheme.colorScheme.secondaryContainer
-            },
+            containerColor = containerColor,
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
@@ -126,11 +162,19 @@ private fun ReminderCard(
                     text = statusText,
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.End,
+                    color = statusColor,
                 )
             }
             Spacer(modifier = Modifier.height(ElderSpacing.small))
             Text(text = reminder.title, style = MaterialTheme.typography.titleLarge)
             Text(text = reminder.detail, style = MaterialTheme.typography.bodyLarge)
+            if (reminder.sourceDisplayName != null) {
+                Text(
+                    text = "来自：${reminder.sourceDisplayName}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (reminder.status == ReminderStatus.Pending) {
                 Spacer(modifier = Modifier.height(ElderSpacing.medium))
                 LargeActionButton(

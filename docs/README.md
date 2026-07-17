@@ -27,6 +27,8 @@
 * [`fastapi-communication.md`](04-middle-server/fastapi-communication.md)：REST、WebSocket、事件、幂等、认证和断线恢复。
 * [`api-contract.md`](04-middle-server/api-contract.md)：FastAPI API 草案。
 * [`family-registration-and-binding-requirements.md`](04-middle-server/family-registration-and-binding-requirements.md)：家属注册、绑定码生成和手机号联合校验的中台交付需求。
+* [`family-notification-and-reminder-requirements.md`](04-middle-server/family-notification-and-reminder-requirements.md)：家属通知、一次性提醒、设备补拉和 ACK 的中台交付需求。
+* [`elder-family-profile-sync-requirements.md`](04-middle-server/elder-family-profile-sync-requirements.md)：老人设备同步真实家属联系人、完整手机号和权限快照的中台交付需求。
 
 ## 05 安全
 

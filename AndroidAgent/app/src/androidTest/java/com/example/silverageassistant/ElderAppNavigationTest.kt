@@ -1,5 +1,6 @@
 package com.example.silverageassistant
 
+import androidx.activity.compose.setContent
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -8,7 +9,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import com.example.silverageassistant.ui.SilverAgeApp
 import com.example.silverageassistant.ui.onboarding.OnboardingTestTags
+import com.example.silverageassistant.ui.onboarding.OnboardingViewModel
+import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
 import org.junit.Rule
 import org.junit.Test
 
@@ -18,6 +22,14 @@ class ElderAppNavigationTest {
 
     @Test
     fun elderRole_opensHomeAndConversation() {
+        val onboardingViewModel = OnboardingViewModel()
+        composeRule.runOnUiThread {
+            composeRule.activity.setContent {
+                SilverAgeAssistantTheme {
+                    SilverAgeApp(onboardingViewModel = onboardingViewModel)
+                }
+            }
+        }
         composeRule.onNodeWithContentDescription("进入老人模式").performClick()
         val elderNameInput = composeRule.onNodeWithTag(OnboardingTestTags.ELDER_NAME_INPUT)
         elderNameInput.performTextClearance()

@@ -9,4 +9,5 @@
     <exclude domain="file" path="datastore/onboarding_test_profiles.preferences_pb" />
     <exclude domain="sharedpref" path="silverage_secure_credentials.xml" />
     <exclude domain="sharedpref" path="silverage_device_identity.xml" />
+    <exclude domain="sharedpref" path="silverage_family_contacts.xml" />
 </full-backup-content>

@@ -43,6 +43,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.silverageassistant.ui.components.ElderScreenScaffold
 import com.example.silverageassistant.ui.components.LargeActionButton
+import com.example.silverageassistant.ui.onboarding.SessionConnectionStatus
 import com.example.silverageassistant.ui.theme.ElderSpacing
 import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
 import java.time.LocalDate
@@ -68,6 +69,8 @@ fun ElderHomeScreen(
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
     elderName: String = "",
+    sessionConnectionStatus: SessionConnectionStatus = SessionConnectionStatus.Unknown,
+    sessionMessage: String? = null,
 ) {
     val formattedDate = remember {
         LocalDate.now().format(DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.CHINA))
@@ -119,6 +122,30 @@ fun ElderHomeScreen(
                     modifier = Modifier.semantics { heading() },
                 )
                 Spacer(modifier = Modifier.height(ElderSpacing.small))
+                if (sessionConnectionStatus != SessionConnectionStatus.Unknown) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.large,
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                    ) {
+                        Column(modifier = Modifier.padding(ElderSpacing.medium)) {
+                            Text(
+                                text = when (sessionConnectionStatus) {
+                                    SessionConnectionStatus.Syncing -> "正在确认家人绑定"
+                                    SessionConnectionStatus.Online -> "家人绑定正常"
+                                    SessionConnectionStatus.Offline -> "暂时离线"
+                                    SessionConnectionStatus.Invalid -> "家人绑定已失效"
+                                    SessionConnectionStatus.Unknown -> ""
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            if (sessionMessage != null) {
+                                Text(sessionMessage, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(ElderSpacing.small))
+                }
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,

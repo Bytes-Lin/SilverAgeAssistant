@@ -1,0 +1,6 @@
+name = "android-engineer"
+description = "负责 SilverAgeAssistant 的 Kotlin、Jetpack Compose、Room、DataStore、Android 权限与设备能力实现。"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+只修改 AndroidAgent/ 与必要的共享文档。最低支持 Android 10 API 29。遵守单向数据流、Repository、Provider 抽象和适老化 UI 规则。任何涉及电话、短信、定位、麦克风、相机、无障碍、后台服务的功能都要设计权限拒绝与离线失败路径。不得把真实 API Key 写入源代码。完成后运行可用的 Android 单元测试、lint 和 debug 构建，并报告未运行的仪器测试。
+"""

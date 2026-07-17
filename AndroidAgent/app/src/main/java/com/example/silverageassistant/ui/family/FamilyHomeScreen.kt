@@ -46,12 +46,15 @@ import androidx.compose.ui.unit.dp
 import com.example.silverageassistant.ui.components.ElderScreenScaffold
 import com.example.silverageassistant.ui.onboarding.BindingPreparationStatus
 import com.example.silverageassistant.ui.onboarding.FamilySetupDraft
+import com.example.silverageassistant.ui.onboarding.SessionConnectionStatus
 import com.example.silverageassistant.ui.theme.ElderSpacing
 
 private data class FamilyFeatureAction(
     val title: String,
     val subtitle: String,
     val icon: ImageVector,
+    val onClick: (() -> Unit)? = null,
+    val requiresBinding: Boolean = false,
 )
 
 @Composable
@@ -61,15 +64,31 @@ fun FamilyHomeScreen(
     bindingCode: String?,
     bindingCodeExpiresAt: String?,
     lastSyncedAt: String?,
+    sessionConnectionStatus: SessionConnectionStatus,
+    sessionMessage: String?,
     onEditProfile: () -> Unit,
+    onSendNotification: () -> Unit,
+    onCreateReminder: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var unavailableMessage by rememberSaveable { mutableStateOf<String?>(null) }
     val actions = listOf(
         FamilyFeatureAction("今日状态", "查看老人主动同步的状态", Icons.Rounded.Favorite),
         FamilyFeatureAction("提醒记录", "查看提醒确认时间线", Icons.AutoMirrored.Rounded.EventNote),
-        FamilyFeatureAction("发送通知", "给老人发送简短消息", Icons.AutoMirrored.Rounded.Message),
-        FamilyFeatureAction("创建提醒", "为老人准备本地提醒指令", Icons.Rounded.AddAlert),
+        FamilyFeatureAction(
+            "发送通知",
+            "给老人发送简短消息",
+            Icons.AutoMirrored.Rounded.Message,
+            onSendNotification,
+            requiresBinding = true,
+        ),
+        FamilyFeatureAction(
+            "创建提醒",
+            "为老人准备本地提醒指令",
+            Icons.Rounded.AddAlert,
+            onCreateReminder,
+            requiresBinding = true,
+        ),
         FamilyFeatureAction("模型用量", "查看客户端上报的估算", Icons.Rounded.BarChart),
         FamilyFeatureAction("紧急事件", "查看并处理老人主动求助", Icons.Rounded.Emergency),
     )
@@ -104,6 +123,8 @@ fun FamilyHomeScreen(
                     bindingCode = bindingCode,
                     bindingCodeExpiresAt = bindingCodeExpiresAt,
                     lastSyncedAt = lastSyncedAt,
+                    sessionConnectionStatus = sessionConnectionStatus,
+                    sessionMessage = sessionMessage,
                 )
             }
             item {
@@ -133,7 +154,13 @@ fun FamilyHomeScreen(
                 FamilyFeatureCard(
                     action = action,
                     onClick = {
-                        unavailableMessage = "${action.title}接口尚未进入当前开发阶段。"
+                        if (action.requiresBinding && bindingStatus != BindingPreparationStatus.Bound) {
+                            unavailableMessage = "请先完成老人设备绑定，再发送通知或提醒。"
+                        } else if (action.onClick != null) {
+                            action.onClick.invoke()
+                        } else {
+                            unavailableMessage = "${action.title}接口尚未进入当前开发阶段。"
+                        }
                     },
                 )
             }
@@ -148,6 +175,8 @@ private fun ConnectionStatusCard(
     bindingCode: String?,
     bindingCodeExpiresAt: String?,
     lastSyncedAt: String?,
+    sessionConnectionStatus: SessionConnectionStatus,
+    sessionMessage: String?,
 ) {
     val isConnected = bindingStatus == BindingPreparationStatus.CodeGenerated ||
         bindingStatus == BindingPreparationStatus.Bound
@@ -158,25 +187,28 @@ private fun ConnectionStatusCard(
         BindingPreparationStatus.CodeGenerated -> "绑定码已生成，请在老人手机上填写"
         BindingPreparationStatus.Bound -> "老人设备已完成绑定"
     }
+    val connectionTitle = when (sessionConnectionStatus) {
+        SessionConnectionStatus.Syncing -> "正在同步中台"
+        SessionConnectionStatus.Online -> "已连接中台"
+        SessionConnectionStatus.Offline -> "暂时离线"
+        SessionConnectionStatus.Invalid -> "登录已失效"
+        SessionConnectionStatus.Unknown -> if (isConnected) "已连接中台" else "尚未连接中台"
+    }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .semantics {
-                contentDescription = if (isConnected) {
-                    "连接状态，已连接中台，绑定码已生成"
-                } else {
-                    "连接状态，尚未连接中台"
-                }
+                contentDescription = "连接状态，$connectionTitle"
             },
         color = MaterialTheme.colorScheme.tertiaryContainer,
         shape = MaterialTheme.shapes.large,
     ) {
         Column(modifier = Modifier.padding(ElderSpacing.medium)) {
-            Text(
-                if (isConnected) "已连接中台" else "尚未连接中台",
-                style = MaterialTheme.typography.titleLarge,
-            )
+            Text(connectionTitle, style = MaterialTheme.typography.titleLarge)
             Text(bindingText, style = MaterialTheme.typography.bodyLarge)
+            if (sessionMessage != null) {
+                Text(sessionMessage, style = MaterialTheme.typography.bodyMedium)
+            }
             if (bindingStatus == BindingPreparationStatus.CodeGenerated && bindingCode != null) {
                 Text("绑定码：$bindingCode", style = MaterialTheme.typography.headlineMedium)
                 if (bindingCodeExpiresAt != null) {

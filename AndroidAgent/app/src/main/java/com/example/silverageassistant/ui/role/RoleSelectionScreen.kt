@@ -61,37 +61,36 @@ fun RoleSelectionScreen(
                 CircularProgressIndicator()
                 Spacer(modifier = Modifier.height(ElderSpacing.medium))
                 Text(
-                    text = "正在读取本机测试资料",
+                    text = "正在恢复登录状态",
                     style = MaterialTheme.typography.bodyLarge,
                     textAlign = TextAlign.Center,
                 )
                 Spacer(modifier = Modifier.height(ElderSpacing.medium))
+            } else {
+                LargeActionButton(
+                    text = "给老人使用",
+                    contentDescription = "进入老人模式",
+                    icon = Icons.Rounded.Elderly,
+                    onClick = onElderSelected,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(ElderSpacing.medium))
+                LargeActionButton(
+                    text = "我是家属",
+                    contentDescription = "进入家属模式",
+                    icon = Icons.Rounded.Groups,
+                    onClick = onFamilySelected,
+                    outlined = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(ElderSpacing.large))
+                Text(
+                    text = "以后可以在设置中更改",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
             }
-            LargeActionButton(
-                text = "给老人使用",
-                contentDescription = "进入老人模式",
-                icon = Icons.Rounded.Elderly,
-                onClick = onElderSelected,
-                enabled = !isLoading,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(modifier = Modifier.height(ElderSpacing.medium))
-            LargeActionButton(
-                text = "我是家属",
-                contentDescription = "进入家属模式",
-                icon = Icons.Rounded.Groups,
-                onClick = onFamilySelected,
-                enabled = !isLoading,
-                outlined = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(modifier = Modifier.height(ElderSpacing.large))
-            Text(
-                text = "以后可以在设置中更改",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
         }
     }
 }

@@ -10,12 +10,10 @@ from app.core.security import (
     keyed_digest,
     mask_mobile,
     normalize_mainland_mobile,
-    utc_now,
 )
 from app.repositories.family_binding import FamilyBindingRepository
 from app.schemas.auth import (
     AccessTokenResponse,
-    DevelopmentVerificationResponse,
     FamilyRegisterRequest,
     FamilyRegisterResponse,
 )
@@ -27,27 +25,8 @@ class AuthService:
         self.settings = settings
         self.repository = FamilyBindingRepository(session)
 
-    def issue_development_verification(self, mobile_number: str) -> DevelopmentVerificationResponse:
-        normalized = normalize_mainland_mobile(mobile_number)
-        token, expires_at = create_jwt(
-            self.settings,
-            subject=keyed_digest(self.settings.security_secret, "verification-subject", normalized),
-            token_type="family_mobile_verification",
-            ttl_seconds=self.settings.verification_token_ttl_seconds,
-            extra={"mobile": normalized},
-        )
-        return DevelopmentVerificationResponse(
-            verification_token=token,
-            expires_at=expires_at,
-            mobile_masked=mask_mobile(normalized),
-        )
-
     async def register_family(self, request: FamilyRegisterRequest) -> FamilyRegisterResponse:
         normalized = normalize_mainland_mobile(request.mobile_number)
-        claims = decode_jwt(self.settings, request.verification_token, "family_mobile_verification")
-        if claims.get("mobile") != normalized:
-            raise ApiError(401, "FAMILY_MOBILE_NOT_VERIFIED", "请先完成手机号验证")
-
         request_id = str(request.client_request_id)
         actor_scope = "mobile:" + keyed_digest(
             self.settings.security_secret, "mobile-actor", normalized
@@ -68,7 +47,7 @@ class AuthService:
                     display_name=request.display_name.strip(),
                     mobile_normalized=normalized,
                     mobile_masked=mask_mobile(normalized),
-                    verified_at=utc_now(),
+                    verified_at=None,
                 )
                 self.repository.add_idempotency(
                     actor_scope, "FAMILY_REGISTER", request_id, family.id

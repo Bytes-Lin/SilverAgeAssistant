@@ -8,6 +8,7 @@ import androidx.compose.material.icons.rounded.Sos
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -15,36 +16,67 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.silverageassistant.ui.conversation.ConversationRoute
-import com.example.silverageassistant.ui.family.FamilyContactsScreen
+import com.example.silverageassistant.ui.family.FamilyContactsRoute
+import com.example.silverageassistant.ui.family.FamilyContactsViewModel
 import com.example.silverageassistant.ui.family.FamilyHomeScreen
+import com.example.silverageassistant.ui.family.FamilyCommunicationViewModel
+import com.example.silverageassistant.ui.family.FamilyNotificationRoute
+import com.example.silverageassistant.ui.family.FamilyReminderRoute
 import com.example.silverageassistant.ui.home.ElderHomeScreen
 import com.example.silverageassistant.ui.navigation.AppDestination
 import com.example.silverageassistant.ui.onboarding.ElderSetupRoute
 import com.example.silverageassistant.ui.onboarding.FamilySetupRoute
 import com.example.silverageassistant.ui.onboarding.OnboardingViewModel
+import com.example.silverageassistant.ui.onboarding.StartupDestination
 import com.example.silverageassistant.ui.placeholder.FeaturePlaceholderScreen
 import com.example.silverageassistant.ui.reminders.ReminderRoute
+import com.example.silverageassistant.ui.reminders.ReminderViewModel
 import com.example.silverageassistant.ui.role.RoleSelectionScreen
+import com.example.silverageassistant.data.session.AppRole
 
 @Composable
 fun SilverAgeApp(
     modifier: Modifier = Modifier,
     navController: NavHostController = rememberNavController(),
     onboardingViewModel: OnboardingViewModel = viewModel(),
+    familyCommunicationViewModel: FamilyCommunicationViewModel = viewModel(),
+    familyContactsViewModel: FamilyContactsViewModel = viewModel(),
+    reminderViewModel: ReminderViewModel = viewModel(),
 ) {
     val onboardingState by onboardingViewModel.uiState.collectAsState()
+    if (onboardingState.isStartupLoading) {
+        RoleSelectionScreen(
+            isLoading = true,
+            onElderSelected = {},
+            onFamilySelected = {},
+            modifier = modifier,
+        )
+        return
+    }
+    LaunchedEffect(onboardingState.hasDeviceCredential) {
+        if (onboardingState.hasDeviceCredential) {
+            reminderViewModel.syncRemoteCommands()
+            familyContactsViewModel.syncContacts()
+        }
+    }
     NavHost(
         navController = navController,
-        startDestination = AppDestination.RoleSelection.route,
+        startDestination = onboardingState.startupDestination.toAppDestination().route,
         modifier = modifier,
     ) {
         composable(AppDestination.RoleSelection.route) {
             RoleSelectionScreen(
                 isLoading = onboardingState.isRestoringProfiles,
                 onElderSelected = {
-                    navController.navigateOnce(AppDestination.ElderSetup)
+                    navController.navigateOnce(
+                        onboardingViewModel.selectRole(AppRole.ELDER).toAppDestination(),
+                    )
                 },
-                onFamilySelected = { navController.navigateOnce(AppDestination.FamilySetup) },
+                onFamilySelected = {
+                    navController.navigateOnce(
+                        onboardingViewModel.selectRole(AppRole.FAMILY).toAppDestination(),
+                    )
+                },
             )
         }
         composable(AppDestination.ElderSetup.route) {
@@ -80,6 +112,8 @@ fun SilverAgeApp(
         composable(AppDestination.ElderHome.route) {
             ElderHomeScreen(
                 elderName = onboardingState.elderDraft.displayName.trim(),
+                sessionConnectionStatus = onboardingState.sessionConnectionStatus,
+                sessionMessage = onboardingState.sessionMessage,
                 onConversation = { navController.navigateOnce(AppDestination.Conversation) },
                 onReminders = { navController.navigateOnce(AppDestination.Reminders) },
                 onLifeAssistant = { navController.navigateOnce(AppDestination.LifeAssistant) },
@@ -96,7 +130,31 @@ fun SilverAgeApp(
                 bindingCode = onboardingState.familyBindingCode,
                 bindingCodeExpiresAt = onboardingState.familyBindingCodeExpiresAt,
                 lastSyncedAt = onboardingState.lastSyncedAt,
+                sessionConnectionStatus = onboardingState.sessionConnectionStatus,
+                sessionMessage = onboardingState.sessionMessage,
                 onEditProfile = { navController.navigateOnce(AppDestination.FamilySetup) },
+                onSendNotification = {
+                    navController.navigateOnce(AppDestination.FamilyNotification)
+                },
+                onCreateReminder = {
+                    navController.navigateOnce(AppDestination.FamilyReminder)
+                },
+            )
+        }
+        composable(AppDestination.FamilyNotification.route) {
+            FamilyNotificationRoute(
+                elderId = onboardingState.familyElderId,
+                elderDisplayName = onboardingState.familyDraft.elderDisplayName,
+                onBack = { navController.popBackStack() },
+                viewModel = familyCommunicationViewModel,
+            )
+        }
+        composable(AppDestination.FamilyReminder.route) {
+            FamilyReminderRoute(
+                elderId = onboardingState.familyElderId,
+                elderDisplayName = onboardingState.familyDraft.elderDisplayName,
+                onBack = { navController.popBackStack() },
+                viewModel = familyCommunicationViewModel,
             )
         }
         composable(AppDestination.Conversation.route) {
@@ -106,10 +164,14 @@ fun SilverAgeApp(
             ReminderRoute(
                 onBack = { navController.popBackStack() },
                 onContactFamily = { navController.navigateOnce(AppDestination.FamilyContacts) },
+                viewModel = reminderViewModel,
             )
         }
         composable(AppDestination.FamilyContacts.route) {
-            FamilyContactsScreen(onBack = { navController.popBackStack() })
+            FamilyContactsRoute(
+                onBack = { navController.popBackStack() },
+                viewModel = familyContactsViewModel,
+            )
         }
         composable(AppDestination.LifeAssistant.route) {
             FeaturePlaceholderScreen(
@@ -145,6 +207,14 @@ fun SilverAgeApp(
             )
         }
     }
+}
+
+private fun StartupDestination.toAppDestination(): AppDestination = when (this) {
+    StartupDestination.RoleSelection -> AppDestination.RoleSelection
+    StartupDestination.ElderSetup -> AppDestination.ElderSetup
+    StartupDestination.FamilySetup -> AppDestination.FamilySetup
+    StartupDestination.ElderHome -> AppDestination.ElderHome
+    StartupDestination.FamilyHome -> AppDestination.FamilyHome
 }
 
 private fun NavHostController.navigateOnce(destination: AppDestination) {

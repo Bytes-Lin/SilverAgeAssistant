@@ -66,7 +66,7 @@ SilverAgeAssistant/
 5. [`M05：Agent Tool Use 与生活助手`](docs/06-development/milestones/M05-agent-tools.md)
 6. [`M06：SOS、图像接口与安全测试`](docs/06-development/milestones/M06-safety-and-testing.md)
 
-老人端和家属端基础 UI 已完成，M04 已开始按明确需求小步接入中台。当前只完成家属注册、老人档案、一次性绑定码、设备绑定与绑定查询；事件同步、WebSocket、提醒指令和用量上报仍未实现。
+老人端和家属端基础 UI 已完成，M04 已开始按明确需求小步接入中台。家属注册、老人档案、一次性绑定码、设备绑定、会话恢复、家属联系人完整快照，以及通知/一次性提醒的可靠命令链路已经实现；通用事件同步、家属状态页和用量上报仍待实现。
 
 中台首版采用 SQLite 本地数据库，以单进程轻量开发和联调为目标；不引入 PostgreSQL、Redis、Docker 数据库依赖、`.env.example` 或 `infra/`。如后续出现多实例部署、并发写入或共享在线状态需求，再单独评估数据库和缓存迁移。
 

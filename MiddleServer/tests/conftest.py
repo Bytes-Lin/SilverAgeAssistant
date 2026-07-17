@@ -19,8 +19,6 @@ async def api(tmp_path: Path) -> AsyncIterator[tuple[AsyncClient, FastAPI, Setti
         auto_create_schema=True,
         jwt_secret="test-jwt-secret-with-enough-entropy",
         security_secret="test-security-secret-with-enough-entropy",
-        dev_verification_enabled=True,
-        dev_verification_key="test-verification-key",
         binding_failure_limit=5,
     )
     app = create_app(settings)
@@ -36,18 +34,11 @@ async def register_family(
     display_name: str = "小林",
     request_id: str = "11111111-1111-4111-8111-111111111111",
 ) -> dict[str, Any]:
-    verification = await client.post(
-        "/api/v1/auth/family/dev-verification-token",
-        headers={"X-Development-Verification-Key": "test-verification-key"},
-        json={"mobile_number": mobile},
-    )
-    assert verification.status_code == 200, verification.text
     response = await client.post(
         "/api/v1/auth/family/register",
         json={
             "display_name": display_name,
             "mobile_number": mobile,
-            "verification_token": verification.json()["verification_token"],
             "client_request_id": request_id,
         },
     )

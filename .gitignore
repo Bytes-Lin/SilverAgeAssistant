@@ -34,6 +34,9 @@ Thumbs.db
 # Codex local logs
 .codex-log/
 
+# Local bug reports and debugging handoff notes
+bug/
+
 # Local models and generated media
 models/
 *.gguf

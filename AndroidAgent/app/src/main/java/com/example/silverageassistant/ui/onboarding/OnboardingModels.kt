@@ -25,6 +25,22 @@ enum class BindingPreparationStatus {
     Bound,
 }
 
+enum class StartupDestination {
+    RoleSelection,
+    ElderSetup,
+    FamilySetup,
+    ElderHome,
+    FamilyHome,
+}
+
+enum class SessionConnectionStatus {
+    Unknown,
+    Syncing,
+    Online,
+    Offline,
+    Invalid,
+}
+
 data class ElderSetupDraft(
     val displayName: String = "",
     val familyMobileNumber: String = "",
@@ -72,12 +88,19 @@ data class OnboardingUiState(
     val elderBindingStatus: BindingPreparationStatus = BindingPreparationStatus.NotPrepared,
     val familyBindingStatus: BindingPreparationStatus = BindingPreparationStatus.NotPrepared,
     val isRestoringProfiles: Boolean = false,
+    val isStartupLoading: Boolean = false,
+    val startupDestination: StartupDestination = StartupDestination.RoleSelection,
+    val hasFamilySession: Boolean = false,
+    val hasDeviceCredential: Boolean = false,
+    val sessionConnectionStatus: SessionConnectionStatus = SessionConnectionStatus.Unknown,
+    val sessionMessage: String? = null,
     val isSubmitting: Boolean = false,
     val networkMessage: String? = null,
     val familyBindingCode: String? = null,
     val familyBindingCodeExpiresAt: String? = null,
     val familyMobileMasked: String? = null,
     val lastSyncedAt: String? = null,
+    val familyElderId: String? = null,
     val persistenceMessage: String? = null,
 )
 

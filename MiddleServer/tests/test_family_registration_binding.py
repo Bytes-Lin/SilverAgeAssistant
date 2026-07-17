@@ -8,7 +8,7 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 
 from app.core.config import Settings
-from app.core.security import create_jwt, format_binding_code, utc_now
+from app.core.security import format_binding_code, utc_now
 from app.models import AuditLog, Binding, BindingCode, DeviceCredential, ElderProfile, FamilyAccount
 from tests.conftest import bind_payload, create_code, create_elder, register_family
 
@@ -45,61 +45,23 @@ async def test_registration_and_elder_creation_are_idempotent(api: ApiFixture) -
     async with app.state.database.session_factory() as session:
         assert await session.scalar(select(func.count(FamilyAccount.id))) == 1
         assert await session.scalar(select(func.count(ElderProfile.id))) == 1
+        stored_family = (await session.scalars(select(FamilyAccount))).one()
+        assert stored_family.mobile_verified_at is None
 
 
-async def test_registration_requires_matching_verification_token(api: ApiFixture) -> None:
+async def test_registration_rejects_removed_verification_token_field(api: ApiFixture) -> None:
     client, _, _ = api
-    verification = await client.post(
-        "/api/v1/auth/family/dev-verification-token",
-        headers={"X-Development-Verification-Key": "test-verification-key"},
-        json={"mobile_number": "13800138000"},
-    )
     response = await client.post(
         "/api/v1/auth/family/register",
         json={
             "display_name": "小林",
-            "mobile_number": "13700137000",
-            "verification_token": verification.json()["verification_token"],
+            "mobile_number": "13800138000",
+            "verification_token": "legacy-field-is-not-accepted",
             "client_request_id": "10000000-0000-4000-8000-000000000001",
         },
     )
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "FAMILY_MOBILE_NOT_VERIFIED"
-
-
-async def test_unverified_family_cannot_generate_binding_code(api: ApiFixture) -> None:
-    client, app, settings = api
-    async with app.state.database.session_factory() as session, session.begin():
-        family = FamilyAccount(
-            display_name="未验证家属",
-            mobile_normalized="13600136000",
-            mobile_masked="136****6000",
-            mobile_verified_at=None,
-        )
-        session.add(family)
-        await session.flush()
-        elder = ElderProfile(
-            display_name="李叔叔",
-            mobile_normalized="13500135000",
-            mobile_masked="135****5000",
-            created_by_family_id=family.id,
-            relationship="RELATIVE",
-            emergency_contact_requested=False,
-        )
-        session.add(elder)
-        await session.flush()
-        family_id, elder_id = family.id, elder.id
-    token, _ = create_jwt(settings, family_id, "family_access", 600)
-    response = await client.post(
-        "/api/v1/bindings/codes",
-        headers={"Authorization": f"Bearer {token}"},
-        json={
-            "elder_id": elder_id,
-            "client_request_id": "10000000-0000-4000-8000-000000000002",
-        },
-    )
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "FAMILY_MOBILE_NOT_VERIFIED"
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "REQUEST_VALIDATION_ERROR"
 
 
 async def test_code_is_six_digits_and_generation_is_idempotent(api: ApiFixture) -> None:

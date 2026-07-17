@@ -1,0 +1,6 @@
+name = "agent-engineer"
+description = "负责老人端 Agent 编排、Tool Use、Memory、RAG、上下文压缩、风险策略与模型 Provider。"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+优先修改 AndroidAgent/agent、AndroidAgent/model 或相应模块和 docs/03-agent-system/elder-agent-design.md、docs/03-agent-system/model-integration.md。所有工具使用强类型 schema，支付、医疗、紧急和隐私工具必须经过确定性 PolicyEngine，不把安全规则仅放在 Prompt。长短期记忆默认保存在老人端，检索后最小化发送给模型。保证 Provider 可切换到本地 llama-server。为工具路由、上下文压缩、记忆写入和风险拦截编写测试。
+"""

@@ -6,6 +6,8 @@ enum class AppDestination(val route: String) {
     FamilySetup("family_setup"),
     ElderHome("elder_home"),
     FamilyHome("family_home"),
+    FamilyNotification("family_notification"),
+    FamilyReminder("family_reminder"),
     Conversation("conversation"),
     Reminders("reminders"),
     LifeAssistant("life_assistant"),

@@ -100,8 +100,6 @@ class FamilyBindingService:
     async def create_binding_code(
         self, family: FamilyAccount, request: BindingCodeCreateRequest
     ) -> BindingCodeResponse:
-        if family.mobile_verified_at is None:
-            raise ApiError(401, "FAMILY_MOBILE_NOT_VERIFIED", "请先完成手机号验证")
         request_id = str(request.client_request_id)
         elder_id = str(request.elder_id)
         async with self.session.begin():
@@ -266,6 +264,7 @@ class FamilyBindingService:
                                 credential,
                             ),
                             now,
+                            now + timedelta(seconds=self.settings.device_credential_ttl_seconds),
                         )
                         self.repository.add_idempotency(
                             actor_scope, "DEVICE_BIND", request_id, binding.id
@@ -306,7 +305,7 @@ class FamilyBindingService:
     async def _match_code(
         self, family: FamilyAccount | None, submitted_code: str
     ) -> BindingCode | None:
-        if family is None or family.mobile_verified_at is None:
+        if family is None:
             # Perform a keyed comparison even for an unknown family to reduce timing differences.
             dummy = hash_binding_code(self.settings.security_secret, "0" * 32, submitted_code)
             hmac.compare_digest(dummy, "0" * 64)

@@ -11,6 +11,7 @@ from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.database import Database
 from app.core.errors import ApiError
+from app.websocket.manager import ConnectionManager
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -32,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = resolved_settings
     app.state.database = database
+    app.state.connection_manager = ConnectionManager()
 
     @app.middleware("http")
     async def request_id_middleware(
@@ -41,6 +43,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        if request.url.path == "/api/v1/devices/me/family-contacts":
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.exception_handler(ApiError)
@@ -60,14 +64,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
-        request: Request, _exc: RequestValidationError
+        request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        missing_idempotency_key = any(
+            error.get("type") == "missing"
+            and tuple(error.get("loc", ())) == ("header", "Idempotency-Key")
+            for error in exc.errors()
+        )
+        command_content_fields = {"content", "created_at", "title", "scheduled_at", "timezone"}
+        invalid_command_content = "/commands/" in request.url.path and any(
+            len(error.get("loc", ())) >= 2
+            and error["loc"][0] == "body"
+            and error["loc"][-1] in command_content_fields
+            for error in exc.errors()
+        )
+        error_code = (
+            "INVALID_COMMAND_CONTENT"
+            if invalid_command_content and not missing_idempotency_key
+            else "REQUEST_VALIDATION_ERROR"
+        )
         return JSONResponse(
-            status_code=422,
+            status_code=400 if missing_idempotency_key or invalid_command_content else 422,
             content={
                 "error": {
-                    "code": "REQUEST_VALIDATION_ERROR",
+                    "code": error_code,
                     "message": "请求参数不正确",
                     "request_id": request_id,
                 }

@@ -4,6 +4,7 @@ from typing import cast
 from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import utc_now
 from app.models import (
     AuditLog,
     Binding,
@@ -32,7 +33,7 @@ class FamilyBindingRepository:
         display_name: str,
         mobile_normalized: str,
         mobile_masked: str,
-        verified_at: datetime,
+        verified_at: datetime | None,
     ) -> FamilyAccount:
         family = FamilyAccount(
             display_name=display_name,
@@ -167,6 +168,10 @@ class FamilyBindingRepository:
         query = select(DeviceCredential).where(
             DeviceCredential.credential_digest == digest,
             DeviceCredential.revoked_at.is_(None),
+            or_(
+                DeviceCredential.expires_at.is_(None),
+                DeviceCredential.expires_at > utc_now(),
+            ),
         )
         return (await self.session.scalars(query)).one_or_none()
 
@@ -197,6 +202,7 @@ class FamilyBindingRepository:
         binding_id: str,
         credential_digest: str,
         now: datetime,
+        expires_at: datetime,
     ) -> DeviceCredential:
         if existing is None:
             device = DeviceCredential(
@@ -206,6 +212,7 @@ class FamilyBindingRepository:
                 binding_id=binding_id,
                 credential_digest=credential_digest,
                 created_at=now,
+                expires_at=expires_at,
             )
             self.session.add(device)
         else:
@@ -214,6 +221,7 @@ class FamilyBindingRepository:
             existing.binding_id = binding_id
             existing.credential_digest = credential_digest
             existing.created_at = now
+            existing.expires_at = expires_at
             existing.revoked_at = None
             device = existing
         await self.session.flush()

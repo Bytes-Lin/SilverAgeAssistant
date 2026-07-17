@@ -1,27 +1,33 @@
 from collections.abc import AsyncIterator
 from typing import cast
 
-from fastapi import Depends, Request
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import HTTPConnection
 
 from app.core.config import Settings
 from app.core.database import Database
 from app.core.errors import ApiError
 from app.core.security import decode_jwt, keyed_digest
-from app.models import FamilyAccount
+from app.models import DeviceCredential, FamilyAccount
 from app.repositories.family_binding import FamilyBindingRepository
 from app.services.family_binding import AuthContext
+from app.websocket.manager import ConnectionManager
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def get_database(request: Request) -> Database:
-    return cast(Database, request.app.state.database)
+def get_database(connection: HTTPConnection) -> Database:
+    return cast(Database, connection.app.state.database)
 
 
-def get_request_settings(request: Request) -> Settings:
-    return cast(Settings, request.app.state.settings)
+def get_request_settings(connection: HTTPConnection) -> Settings:
+    return cast(Settings, connection.app.state.settings)
+
+
+def get_connection_manager(connection: HTTPConnection) -> ConnectionManager:
+    return cast(ConnectionManager, connection.app.state.connection_manager)
 
 
 async def get_session(database: Database = Depends(get_database)) -> AsyncIterator[AsyncSession]:
@@ -67,3 +73,18 @@ async def get_auth_context(
     if family is None or not family.is_active:
         raise ApiError(401, "AUTHENTICATION_REQUIRED", "认证信息无效或已过期")
     return AuthContext(kind="family", principal_id=family.id)
+
+
+async def get_current_device(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_request_settings),
+) -> DeviceCredential:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise ApiError(401, "AUTHENTICATION_REQUIRED", "需要老人设备认证")
+    digest = keyed_digest(settings.security_secret, "device-credential", credentials.credentials)
+    device = await FamilyBindingRepository(session).get_device_by_digest(digest)
+    await session.commit()
+    if device is None:
+        raise ApiError(401, "AUTHENTICATION_REQUIRED", "认证信息无效或已过期")
+    return device

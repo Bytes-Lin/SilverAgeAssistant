@@ -11,11 +11,19 @@
 - [x] 绑定字段校验和“待中台确认”状态；
 - [x] 中台注册、绑定码和手机号联合校验交付需求；
 - [x] Debug 测试用基础资料 DataStore 持久化（排除绑定码和凭证）；
-- [ ] 生产角色默认值和正式初始化状态持久化；
+- [x] 生产角色默认值和正式初始化状态持久化；
 - [x] 绑定请求/响应模型与可替换 Repository；
 - [x] Debug 中台地址配置和仅 Debug 明文 HTTP 放行；
 - [x] Android Keystore + AES-GCM 加密保存家属令牌和 device credential；
 - [x] 模拟器在线完成家属注册、生成绑定码和老人绑定全链路；
+- [x] 重启会话恢复、旧加密凭证迁移与离线首页降级；
+- [x] 家属 access token 刷新后重试绑定查询；
+- [x] Android 家属通知和一次性提醒表单及中台 Repository；
+- [x] Android 老人端命令补拉、Room 幂等落库和 ACK 重试；
+- [x] 中台通知/提醒接口与验收需求文档；
+- [x] 老人端今日提醒按事件时间排序、已完成置底和稍后提醒独立配色；
+- [x] Android 真实家属联系人客户端、加密离线快照和系统拨号入口；
+- [x] 老人设备同步家属资料的中台接口与验收需求文档；
 
 中台首版约束：单进程 FastAPI + SQLite，不引入 PostgreSQL、Redis、`.env.example`、`infra/` 或数据库 Docker 依赖。
 
@@ -26,11 +34,12 @@
 - [x] 绑定查询、撤销与主体权限过滤；
 - [x] 绑定幂等、失败限流、并发消费和脱敏审计测试；
 - [ ] 事件 API 与幂等；
-- [ ] Android outbox；
-- [ ] WebSocket + ACK；
-- [ ] REST 断线补拉；
+- [ ] Android 通用事件 outbox（通知/提醒当前复用稳定请求 ID，尚未建立后台自动重发队列）；
+- [x] 通知/提醒 `COMMAND_AVAILABLE` WebSocket 提示和 `STORED` ACK；
+- [x] 通知/提醒 REST 断线补拉；
 - [ ] 家属状态页；
-- [ ] 远程通知/提醒指令；
+- [x] 中台远程通知/提醒指令接口；
+- [x] 中台 `GET /devices/me/family-contacts` 家属资料快照接口；
 - [ ] 用量上报与估算；
 - [ ] 明确后台非实时 UI；
 - [ ] 双设备端到端测试。

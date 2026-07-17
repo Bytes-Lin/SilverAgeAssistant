@@ -24,6 +24,8 @@ interface MiddleServerCredentialStore {
     suspend fun saveDeviceCredential(credential: String)
     suspend fun loadFamilySession(): FamilySession?
     suspend fun loadDeviceCredential(): String?
+    suspend fun clearFamilySession()
+    suspend fun clearDeviceCredential()
 }
 
 class AndroidKeystoreCredentialStore(context: Context) : MiddleServerCredentialStore {
@@ -53,6 +55,18 @@ class AndroidKeystoreCredentialStore(context: Context) : MiddleServerCredentialS
 
     override suspend fun loadDeviceCredential(): String? = withContext(Dispatchers.IO) {
         preferences.getString(DEVICE_CREDENTIAL, null)?.let(::decrypt)
+    }
+
+    override suspend fun clearFamilySession() = withContext(Dispatchers.IO) {
+        preferences.edit {
+            remove(ACCESS_TOKEN)
+            remove(REFRESH_TOKEN)
+            remove(ACCESS_TOKEN_EXPIRES_AT)
+        }
+    }
+
+    override suspend fun clearDeviceCredential() = withContext(Dispatchers.IO) {
+        preferences.edit { remove(DEVICE_CREDENTIAL) }
     }
 
     private fun encrypt(plainText: String): String {
@@ -105,5 +119,35 @@ class AndroidKeystoreCredentialStore(context: Context) : MiddleServerCredentialS
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val GCM_TAG_LENGTH_BITS = 128
         const val SEPARATOR = "."
+    }
+}
+
+class InMemoryMiddleServerCredentialStore(
+    familySession: FamilySession? = null,
+    deviceCredential: String? = null,
+) : MiddleServerCredentialStore {
+    var familySession: FamilySession? = familySession
+        private set
+    var deviceCredential: String? = deviceCredential
+        private set
+
+    override suspend fun saveFamilySession(session: FamilySession) {
+        familySession = session
+    }
+
+    override suspend fun saveDeviceCredential(credential: String) {
+        deviceCredential = credential
+    }
+
+    override suspend fun loadFamilySession(): FamilySession? = familySession
+
+    override suspend fun loadDeviceCredential(): String? = deviceCredential
+
+    override suspend fun clearFamilySession() {
+        familySession = null
+    }
+
+    override suspend fun clearDeviceCredential() {
+        deviceCredential = null
     }
 }

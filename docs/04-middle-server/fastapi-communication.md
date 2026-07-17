@@ -10,7 +10,7 @@
 - HTTPS REST + WSS WebSocket
 - pytest + Ruff + 类型检查
 
-当前首版按单进程、轻量本地开发设计，不引入 PostgreSQL、Redis 或数据库 Docker 依赖。M04 已实现家属注册、老人档案、一次性绑定码、设备凭证和绑定查询子任务。
+当前首版按单进程、轻量本地开发设计，不引入 PostgreSQL、Redis 或数据库 Docker 依赖。M04 已实现家属注册、老人档案、一次性绑定码、设备凭证、绑定查询、家属联系人完整快照，以及家属通知/一次性提醒的创建、补拉、ACK 和在线提示子任务。
 
 ## 2. 服务器职责
 
@@ -34,7 +34,7 @@
 
 ### WebSocket
 
-用于双方在线时的低延迟“有新事件”通知。消息中只携带必要概要和 `event_id`，客户端随后按需 REST 获取详情。
+用于双方在线时的低延迟“有新事件”通知。当前 `/api/v1/ws` 先实现老人设备 `COMMAND_AVAILABLE`，消息中只携带 `command_id`、类型和序列号，客户端随后通过 REST 获取详情；通用事件 WebSocket 信封仍属于后续任务。
 
 ### 重连补偿
 
@@ -98,6 +98,8 @@ Event
 - `FAMILY_MESSAGE_CREATED`
 - `REMOTE_REMINDER_CREATED`
 - `REMOTE_REMINDER_ACCEPTED`
+- `FAMILY_NOTIFICATION_STORED`
+- `REMOTE_REMINDER_STORED`
 - `EMERGENCY_TRIGGERED`
 - `EMERGENCY_ACKNOWLEDGED`
 - `ORDER_APPROVAL_REQUESTED`
@@ -114,13 +116,17 @@ Event
 - 客户端 outbox 表保存待上传事件，成功后标记完成；
 - 服务端先提交数据库，再尝试 WebSocket。
 
+家属通知和提醒采用独立 command 资源：家属 REST 创建后先写 SQLite，老人端补拉完整命令并写入本地 Room，随后发送 `STORED` ACK。具体接口见 [`family-notification-and-reminder-requirements.md`](family-notification-and-reminder-requirements.md)。
+
+老人设备的家属联系人使用独立完整快照：`GET /api/v1/devices/me/family-contacts` 根据 device credential 确定老人档案并投影当前有效绑定资料。接口已实现稳定快照摘要、完整手机号白名单、活跃绑定过滤、脱敏审计和 `no-store` 缓存策略。完整契约见 [`elder-family-profile-sync-requirements.md`](elder-family-profile-sync-requirements.md)。
+
 ## 7. 认证
 
-家属：手机号/开发账号 → access token + refresh token。
+家属：轻量联调版使用自报手机号直接注册 → access token + refresh token。当前不提供开发验证令牌接口，也不代表手机号真实性已经验证；正式对外部署前再接入真实验证 Provider。
 
 老人设备：绑定码换取 device credential；凭证与设备、老人档案绑定，可吊销。
 
-WebSocket 连接使用短期 access token 或握手后的认证消息，禁止在 URL 查询参数长期暴露 Refresh Token。
+当前老人设备 WebSocket 使用 `Authorization: Bearer <device_credential>` 请求头认证。后续家属 WebSocket 可使用短期 access token 或握手后的认证消息；禁止在 URL 查询参数暴露 Refresh Token 或 device credential。
 
 ## 8. 权限
 
@@ -182,8 +188,10 @@ MiddleServer/app/
 - `SILVERAGE_AUTO_CREATE_SCHEMA`：是否在启动时自动建表，默认关闭；正常开发使用 Alembic；
 - `SILVERAGE_JWT_SECRET`：家属 JWT 签名密钥；
 - `SILVERAGE_SECURITY_SECRET`：绑定码、设备凭证和限流摘要密钥；
-- `SILVERAGE_DEV_VERIFICATION_ENABLED`：是否开放开发验证令牌端点，默认关闭；
-- `SILVERAGE_DEV_VERIFICATION_KEY`：开发验证端点请求头密钥；
 - `SILVERAGE_BINDING_CODE_TTL_SECONDS`：绑定码有效期，默认 600 秒。
+- `SILVERAGE_DEVICE_CREDENTIAL_TTL_SECONDS`：新签发设备凭证有效期，默认一年；迁移前旧凭证保持兼容；
+- `SILVERAGE_COMMAND_DEFAULT_TIMEZONE`：即时通知的默认 IANA 时区，默认 `Asia/Shanghai`；
+- `SILVERAGE_COMMAND_PER_MINUTE_LIMIT`：单家属对单老人每分钟命令上限，默认 10；
+- `SILVERAGE_COMMAND_PER_DAY_LIMIT`：单家属对单老人 24 小时命令上限，默认 200。
 
-仓库内的默认密钥只允许本机开发。非 development 环境若仍使用默认密钥或启用开发验证端点，服务将拒绝启动。真实部署必须由 TLS 反向代理提供 HTTPS。
+仓库内的默认密钥只允许本机开发。非 development 环境若仍使用默认密钥，服务将拒绝启动。真实部署必须由 TLS 反向代理提供 HTTPS。
