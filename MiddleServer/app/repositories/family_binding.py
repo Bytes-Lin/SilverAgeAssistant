@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import cast
 
-from sqlalchemy import Select, and_, func, or_, select, update
+from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import utc_now
@@ -89,15 +89,27 @@ class FamilyBindingRepository:
         operation: str,
         request_id: str,
         resource_id: str,
+        created_at: datetime | None = None,
     ) -> None:
-        self.session.add(
-            IdempotencyRecord(
-                actor_scope=actor_scope,
-                operation=operation,
-                client_request_id=request_id,
-                resource_id=resource_id,
-            )
+        values: dict[str, object] = {
+            "actor_scope": actor_scope,
+            "operation": operation,
+            "client_request_id": request_id,
+            "resource_id": resource_id,
+        }
+        if created_at is not None:
+            values["created_at"] = created_at
+        self.session.add(IdempotencyRecord(**values))
+
+    async def get_active_binding_for_family_elder(
+        self, family_id: str, elder_id: str
+    ) -> Binding | None:
+        query = select(Binding).where(
+            Binding.family_account_id == family_id,
+            Binding.elder_id == elder_id,
+            Binding.revoked_at.is_(None),
         )
+        return (await self.session.scalars(query)).one_or_none()
 
     async def revoke_active_codes(self, family_id: str, elder_id: str, revoked_at: datetime) -> int:
         statement = (
@@ -181,6 +193,7 @@ class FamilyBindingRepository:
         family: FamilyAccount,
         permissions: list[str],
         audit_source: str,
+        created_at: datetime,
     ) -> Binding:
         binding = Binding(
             elder_id=elder.id,
@@ -188,6 +201,7 @@ class FamilyBindingRepository:
             relationship=elder.relationship,
             permissions=permissions,
             audit_source=audit_source,
+            created_at=created_at,
         )
         self.session.add(binding)
         await self.session.flush()
@@ -226,6 +240,26 @@ class FamilyBindingRepository:
             device = existing
         await self.session.flush()
         return device
+
+    async def list_unrevoked_devices_for_elder(self, elder_id: str) -> list[DeviceCredential]:
+        query = select(DeviceCredential).where(
+            DeviceCredential.elder_id == elder_id,
+            DeviceCredential.revoked_at.is_(None),
+        )
+        return list((await self.session.scalars(query)).all())
+
+    async def revoke_unrevoked_devices_for_elder(self, elder_id: str, revoked_at: datetime) -> int:
+        statement = (
+            update(DeviceCredential)
+            .where(
+                DeviceCredential.elder_id == elder_id,
+                DeviceCredential.revoked_at.is_(None),
+            )
+            .values(revoked_at=revoked_at)
+            .execution_options(synchronize_session="fetch")
+        )
+        result = await self.session.execute(statement)
+        return int(result.rowcount)  # type: ignore[attr-defined]
 
     async def get_binding(self, binding_id: str) -> Binding | None:
         return await self.session.get(Binding, binding_id)
@@ -305,19 +339,3 @@ class FamilyBindingRepository:
             .execution_options(synchronize_session=False)
         )
         await self.session.execute(statement)
-
-    async def find_active_binding_for_device_or_family(
-        self, device_id: str, elder_id: str, family_id: str
-    ) -> Binding | None:
-        query = (
-            select(Binding)
-            .outerjoin(DeviceCredential, DeviceCredential.binding_id == Binding.id)
-            .where(
-                Binding.revoked_at.is_(None),
-                or_(
-                    DeviceCredential.external_device_id == device_id,
-                    and_(Binding.elder_id == elder_id, Binding.family_account_id == family_id),
-                ),
-            )
-        )
-        return (await self.session.scalars(query)).first()

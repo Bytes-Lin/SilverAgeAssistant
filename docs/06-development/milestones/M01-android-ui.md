@@ -11,6 +11,7 @@
 - [x] 建立适老化 Theme、Typography、Spacing、LargeActionButton；
 - [x] 老人首页六个入口；
 - [x] 对话页 Mock 状态机；
+- [x] 对话气泡窗、Mock 问候、打字和系统手写输入入口；
 - [x] 今日提醒页 Mock；
 - [x] 联系家属页 Mock；
 - [x] 生活助手、音乐、SOS、设置占位页；

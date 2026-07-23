@@ -183,7 +183,7 @@ class CommandService:
                 command_id=UUID(command.id),
                 server_sequence=command.server_sequence,
                 elder_id=UUID(command.elder_id),
-                command_type=command.command_type,
+                command_type=CommandType(command.command_type),
                 title=command.title,
                 content=command.content,
                 scheduled_at=(ensure_utc(command.scheduled_at) if command.scheduled_at else None),
@@ -335,7 +335,7 @@ class CommandService:
         return CommandCreateResponse(
             command_id=UUID(command.id),
             elder_id=UUID(command.elder_id),
-            command_type=command.command_type,
+            command_type=CommandType(command.command_type),
             server_sequence=command.server_sequence,
             status=CommandStatus.PENDING,
             created_at=ensure_utc(command.created_at),

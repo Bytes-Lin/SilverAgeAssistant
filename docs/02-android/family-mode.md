@@ -14,6 +14,7 @@
 - 设置关系、优先级和紧急联系方式；
 - 设置支付二次确认阈值；
 - 协助配置老人模型 API Key，但 Key 只在老人设备输入/保存。
+- 设置老人端模型服务地址、模型名、协议方言、上下文长度、最大生成 Token 和采样参数；非敏感配置可通过中台下发。
 
 ### 状态查看
 
@@ -60,6 +61,36 @@
 - 每日/月度阈值。
 
 不得把该数据标为云厂商正式账单。
+
+Android 已实现家属端“模型用量”页面，默认查询当月汇总，展示 MLLM 输入/输出 Token、MLLM/ASR/TTS 调用次数、最后汇报时间和是否含本地估算。老人端本地账本通过唯一 WorkManager 任务每小时聚合汇报；中台未实现或网络失败时记录继续留在本地待重试。
+
+进入页面只读取中台已有数据。家属明确点击“立即刷新用量”时，Android 先请求中台通知在线老人设备；老人端通过现有认证 WebSocket 接收 `MODEL_USAGE_REPORT_REQUESTED`，随后排入一次性 WorkManager 上传，家属端最多轮询约 6 秒。老人设备离线时显示上次汇报数据和离线说明。接口契约见 [`../04-middle-server/model-usage-reporting-requirements.md`](../04-middle-server/model-usage-reporting-requirements.md)。
+
+用量页面新增“今日用量”和本月每日趋势。今日卡片展示聊天 Token、模型调用、ASR 和
+TTS 次数；本月汇总保留总量文字。第一张横向可滚动柱状图按天堆叠输入/输出 Token，
+第二张按天并列展示 ASR/TTS 次数，柱组提供无障碍文字说明。Android 一次请求中台已实现的
+每日分桶接口并补齐当月零用量日期，不发起逐日查询风暴。
+
+每日边界以老人手机位置为准，不以家属手机时区为准。老人端天气查询已经使用当前位置和
+Open-Meteo `timezone=auto`，成功后将返回的 IANA 时区保存在本地，并随模型用量批次上报。
+中台使用最近的位置时区返回老人当地 `current_date` 和自然月分桶，家属 Android 不发送
+时区参数。位置时区尚不可用时才使用设备系统时区并标记 `SYSTEM_FALLBACK`，页面必须
+显示降级提示，不得硬编码 `Asia/Shanghai`。
+
+### 模型配置
+
+家属首页提供“模型配置”入口。页面可读取和修改：
+
+- OpenAI 兼容服务地址；
+- 模型名称；
+- `llama_cpp` 或标准 OpenAI 兼容方言；
+- 上下文长度 Token；
+- 最大生成 Token；
+- `temperature`、`top_p`、`top_k`。
+
+日常聊天思考模式固定关闭。配置由中台可靠保存，老人端在启动及进入聊天时使用 device credential 补拉，通过校验后原子写入应用私有 `files/agent/model-config.json`，下一轮聊天直接读取最新值。拉取失败保留上次可用配置。
+
+API Key 不在家属页面填写、不经过中台，也不进入配置 JSON。正式云端 Key 继续只由老人设备的 Keystore 加密存储管理。开发用无密钥 llama-server 可以直接使用远程非敏感配置。中台接口见 [`../04-middle-server/remote-model-configuration-requirements.md`](../04-middle-server/remote-model-configuration-requirements.md)。
 
 ## 3. 隐私边界
 
@@ -119,6 +150,15 @@ UI 必须显示“实时连接中/已断开”和“最后同步时间”。
 - 正式角色与初始化状态保存在独立的应用状态 DataStore 中，与仅用于 Debug 自动回填表单的测试资料分离；正式状态不保存手机号、绑定码或认证凭证。
 - 重启应用时，完成初始化且存在加密凭证的角色直接进入首页，不重复调用注册或设备绑定接口；旧版本已保存的加密凭证会参与首次迁移恢复。
 - 家属端进入首页后后台调用绑定查询接口；access token 失效时使用 refresh token 刷新并重试。老人端使用 device credential 查询绑定。网络不可用时仍停留在首页并展示离线状态，凭证被服务端明确拒绝时展示登录失效状态。
+- 家属首页提供“重新生成绑定码”，使用已保存的家属会话和老人档案 ID 再次调用 `POST /bindings/codes`。成功后显示新码但保留原“已绑定”状态，不误禁用通知和提醒入口。
+- 中台已经支持已有绑定场景下的设备重新绑定：新设备使用新绑定码成功后原子轮换旧 device credential，契约见 [`../04-middle-server/device-rebinding-requirements.md`](../04-middle-server/device-rebinding-requirements.md)。
+
+### 状态检测远程控制
+
+家属端可选择“关闭状态检测”或 1/5/10/15/30/60 分钟。保存时同时提交独立的
+`enabled` 和 `interval_minutes`；老人端收到 WebSocket 提示后立即 REST 补拉完整配置。
+运行中修改间隔会即时重排下一次检测但保留六小时历史，关闭会清空历史并停止图像和
+MLLM 分析。关闭后老人设备仍保持最小配置监听，以便家属再次开启时实时生效。
 
 ## 6. 本地中台联调地址
 

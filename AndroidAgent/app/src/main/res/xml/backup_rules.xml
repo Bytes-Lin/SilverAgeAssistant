@@ -8,6 +8,12 @@
 <full-backup-content>
     <exclude domain="file" path="datastore/onboarding_test_profiles.preferences_pb" />
     <exclude domain="sharedpref" path="silverage_secure_credentials.xml" />
+    <exclude domain="file" path="datastore/silverage_model_credentials.preferences_pb" />
     <exclude domain="sharedpref" path="silverage_device_identity.xml" />
     <exclude domain="sharedpref" path="silverage_family_contacts.xml" />
+    <exclude domain="sharedpref" path="silverage_location_timezone.xml" />
+    <exclude domain="file" path="agent/MEMORY.md" />
+    <exclude domain="file" path="agent/model-config.json" />
+    <exclude domain="file" path="agent/safety-monitor-config.json" />
+    <exclude domain="file" path="agent/safety-detection-state.json" />
 </full-backup-content>

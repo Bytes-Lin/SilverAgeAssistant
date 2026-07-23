@@ -22,6 +22,9 @@ class Database:
         self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False)
         self.binding_lock = asyncio.Lock()
         self.command_lock = asyncio.Lock()
+        self.model_configuration_lock = asyncio.Lock()
+        self.model_usage_lock = asyncio.Lock()
+        self.safety_monitoring_lock = asyncio.Lock()
 
         if settings.database_url.startswith("sqlite"):
             event.listen(self.engine.sync_engine, "connect", self._configure_sqlite)

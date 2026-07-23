@@ -5,6 +5,8 @@ import com.example.silverageassistant.data.middleserver.ElderFamilyContactsRepos
 import com.example.silverageassistant.data.middleserver.FamilyContactProfile
 import com.example.silverageassistant.data.middleserver.FamilyContactsSyncResult
 import com.example.silverageassistant.data.middleserver.MiddleServerRequestException
+import com.example.silverageassistant.domain.agent.AgentLongTermMemory
+import com.example.silverageassistant.domain.agent.MemoryFamilyContact
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
@@ -33,7 +35,13 @@ class FamilyContactsViewModelTest {
     fun successfulSync_replacesAndPersistsContactSnapshot() {
         val store = InMemoryFamilyContactStore()
         val remote = snapshot(contact(name = "王先生", mobile = "13900139000"), version = "v2")
-        val viewModel = viewModel(store, FakeRepository(result = remote))
+        val memory = RecordingAgentLongTermMemory()
+        val viewModel = FamilyContactsViewModel(
+            store = store,
+            repository = FakeRepository(result = remote),
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+            agentLongTermMemory = memory,
+        )
 
         viewModel.syncContacts()
 
@@ -41,6 +49,8 @@ class FamilyContactsViewModelTest {
         assertEquals("王先生", viewModel.uiState.value.contacts.single().displayName)
         assertFalse(viewModel.uiState.value.isSyncing)
         assertFalse(viewModel.uiState.value.isError)
+        assertEquals("王先生", memory.contacts.single().displayName)
+        assertEquals("已在本机安全保存", memory.contacts.single().contactHint)
     }
 
     @Test
@@ -64,19 +74,35 @@ class FamilyContactsViewModelTest {
     fun revokedAccess_clearsCachedContacts() {
         val cached = snapshot(contact(name = "陈女士", mobile = "13700137000"), version = "v1")
         val store = InMemoryFamilyContactStore(cached)
+        val memory = RecordingAgentLongTermMemory().apply {
+            contacts = listOf(
+                MemoryFamilyContact.fromSensitiveContact(
+                    displayName = "陈女士",
+                    relationship = "CHILD",
+                    mobileNumber = "13700137000",
+                    emergencyContact = true,
+                ),
+            )
+        }
         val repository = FakeRepository(
             error = MiddleServerRequestException(
                 "FAMILY_CONTACTS_FORBIDDEN",
                 "当前设备无权读取家属联系人。",
             ),
         )
-        val viewModel = viewModel(store, repository)
+        val viewModel = FamilyContactsViewModel(
+            store = store,
+            repository = repository,
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+            agentLongTermMemory = memory,
+        )
 
         viewModel.syncContacts()
 
         assertEquals(null, store.snapshot)
         assertTrue(viewModel.uiState.value.contacts.isEmpty())
         assertTrue(viewModel.uiState.value.isError)
+        assertTrue(memory.contacts.isEmpty())
     }
 
     private fun viewModel(
@@ -116,5 +142,27 @@ class FamilyContactsViewModelTest {
             error?.let { throw it }
             return requireNotNull(result)
         }
+    }
+
+    private class RecordingAgentLongTermMemory : AgentLongTermMemory {
+        var contacts: List<MemoryFamilyContact> = emptyList()
+
+        override suspend fun updateElderPreferredName(preferredName: String) = Unit
+
+        override suspend fun recordBoundFamily(contact: MemoryFamilyContact) {
+            if (contacts.isEmpty()) contacts = listOf(contact)
+        }
+
+        override suspend fun replaceFamilyContacts(contacts: List<MemoryFamilyContact>) {
+            this.contacts = contacts
+        }
+
+        override suspend fun clearFamilyContacts() {
+            contacts = emptyList()
+        }
+
+        override suspend fun appendMemory(note: String) = Unit
+
+        override suspend fun markdownForPrompt(): String = ""
     }
 }

@@ -14,6 +14,8 @@ import com.example.silverageassistant.data.onboarding.PersistedOnboardingProfile
 import com.example.silverageassistant.data.session.AppRole
 import com.example.silverageassistant.data.session.AppSessionStore
 import com.example.silverageassistant.data.session.PersistedAppSession
+import com.example.silverageassistant.domain.agent.AgentLongTermMemory
+import com.example.silverageassistant.domain.agent.MemoryFamilyContact
 import java.io.IOException
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -26,11 +28,18 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/**
+ * 双角色初始化与会话恢复状态机。
+ *
+ * 表单草稿、正式角色状态和加密凭证分别存储。启动时优先恢复既有会话，只有凭证缺失或
+ * 服务端明确拒绝时才回到注册/绑定页；普通断网不会清除已经完成的老人或家属身份。
+ */
 class OnboardingViewModel(
     private val profileStore: OnboardingProfileStore? = null,
     private val middleServerRepository: OnboardingMiddleServerRepository? = null,
     private val appSessionStore: AppSessionStore? = null,
     private val credentialStore: MiddleServerCredentialStore? = null,
+    private val agentLongTermMemory: AgentLongTermMemory? = null,
     externalScope: CoroutineScope? = null,
 ) : ViewModel() {
     private val workScope = externalScope ?: viewModelScope
@@ -173,6 +182,17 @@ class OnboardingViewModel(
                         sessionConnectionStatus = SessionConnectionStatus.Online,
                     )
                 }
+                runCatching {
+                    agentLongTermMemory?.updateElderPreferredName(draft.displayName.trim())
+                    agentLongTermMemory?.recordBoundFamily(
+                        MemoryFamilyContact.fromSensitiveContact(
+                            displayName = "已绑定家属",
+                            relationship = result.relationship,
+                            mobileNumber = result.familyMobileMasked,
+                            emergencyContact = false,
+                        ),
+                    )
+                }
                 onCompleted()
             } catch (error: MiddleServerRequestException) {
                 showNetworkFailure(error.userMessage)
@@ -263,6 +283,63 @@ class OnboardingViewModel(
                 showNetworkFailure(error.userMessage)
             } catch (_: Exception) {
                 showNetworkFailure("中台凭证保存失败，请稍后重试。")
+            }
+        }
+        return true
+    }
+
+    fun regenerateFamilyBindingCode(): Boolean {
+        val state = _uiState.value
+        if (state.isSubmitting) return false
+        val repository = middleServerRepository
+        val elderId = state.familyElderId
+        if (repository == null || elderId.isNullOrBlank()) {
+            _uiState.update {
+                it.copy(networkMessage = "缺少老人档案信息，请先同步中台后重试。")
+            }
+            return false
+        }
+
+        _uiState.update {
+            it.copy(
+                isSubmitting = true,
+                networkMessage = "正在重新生成绑定码…",
+            )
+        }
+        workScope.launch {
+            try {
+                val result = repository.regenerateBindingCode(elderId)
+                val syncedAt = Instant.now().toString()
+                appSessionStore?.update {
+                    it.copy(
+                        lastSyncedAt = syncedAt,
+                        familyElderId = result.elderId ?: elderId,
+                    )
+                }
+                _uiState.update {
+                    it.copy(
+                        isSubmitting = false,
+                        familyBindingStatus = if (
+                            it.familyBindingStatus == BindingPreparationStatus.Bound
+                        ) {
+                            BindingPreparationStatus.Bound
+                        } else {
+                            BindingPreparationStatus.CodeGenerated
+                        },
+                        familyBindingCode = result.bindingCode,
+                        familyBindingCodeExpiresAt = result.bindingCodeExpiresAt,
+                        familyMobileMasked = result.familyMobileMasked,
+                        lastSyncedAt = syncedAt,
+                        familyElderId = result.elderId ?: elderId,
+                        sessionConnectionStatus = SessionConnectionStatus.Online,
+                        sessionMessage = null,
+                        networkMessage = "新绑定码已生成，请在老人手机上填写。",
+                    )
+                }
+            } catch (error: MiddleServerRequestException) {
+                showNetworkFailure(error.userMessage)
+            } catch (_: Exception) {
+                showNetworkFailure("重新生成绑定码失败，请稍后重试。")
             }
         }
         return true
@@ -536,9 +613,25 @@ class OnboardingViewModel(
                         sessionMessage = null,
                     )
                 }
+                runCatching {
+                    if (binding == null) {
+                        agentLongTermMemory?.clearFamilyContacts()
+                    } else {
+                        agentLongTermMemory?.updateElderPreferredName(binding.elderDisplayName)
+                        agentLongTermMemory?.recordBoundFamily(
+                            MemoryFamilyContact.fromSensitiveContact(
+                                displayName = binding.familyDisplayName,
+                                relationship = binding.relationship,
+                                mobileNumber = "",
+                                emergencyContact = false,
+                            ),
+                        )
+                    }
+                }
             }
             SessionRestoreStatus.OFFLINE -> showOfflineSession()
             SessionRestoreStatus.INVALID, SessionRestoreStatus.MISSING -> {
+                runCatching { agentLongTermMemory?.clearFamilyContacts() }
                 _uiState.update {
                     it.copy(
                         hasDeviceCredential = false,
@@ -651,6 +744,7 @@ class OnboardingViewModel(
         private val middleServerRepository: OnboardingMiddleServerRepository? = null,
         private val appSessionStore: AppSessionStore? = null,
         private val credentialStore: MiddleServerCredentialStore? = null,
+        private val agentLongTermMemory: AgentLongTermMemory? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -660,6 +754,7 @@ class OnboardingViewModel(
                 middleServerRepository = middleServerRepository,
                 appSessionStore = appSessionStore,
                 credentialStore = credentialStore,
+                agentLongTermMemory = agentLongTermMemory,
             ) as T
         }
     }

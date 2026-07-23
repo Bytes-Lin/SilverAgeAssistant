@@ -53,6 +53,12 @@ interface OnboardingMiddleServerRepository {
         request: FamilyOnboardingRequest,
     ): FamilyOnboardingResult
 
+    suspend fun regenerateBindingCode(elderId: String): FamilyOnboardingResult =
+        throw MiddleServerRequestException(
+            code = "BINDING_CODE_REGENERATION_UNAVAILABLE",
+            userMessage = "暂时无法重新生成绑定码，请稍后重试。",
+        )
+
     suspend fun bindElderDevice(request: ElderBindingRequest): ElderBindingResult
 
     suspend fun restoreFamilySession(): SessionRestoreResult =

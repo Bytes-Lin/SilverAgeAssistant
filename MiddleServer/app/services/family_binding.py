@@ -30,6 +30,7 @@ from app.schemas.binding import (
     DeviceBindResponse,
     ElderCreateRequest,
     ElderResponse,
+    Relationship,
 )
 
 
@@ -92,7 +93,7 @@ class FamilyBindingService:
             elder_id=UUID(elder.id),
             display_name=elder.display_name,
             elder_mobile_masked=elder.mobile_masked,
-            relationship=elder.relationship,
+            relationship=Relationship(elder.relationship),
             emergency_contact=elder.emergency_contact_requested,
             created_at=ensure_utc(elder.created_at),
         )
@@ -212,7 +213,10 @@ class FamilyBindingService:
             )
             if idempotency:
                 response = await self._rebuild_bind_response(
-                    idempotency.resource_id, request.device_id, request_id
+                    idempotency.resource_id,
+                    request.device_id,
+                    request_id,
+                    ensure_utc(idempotency.created_at),
                 )
             else:
                 family = await self.repository.get_family_by_mobile(normalized_mobile)
@@ -230,44 +234,69 @@ class FamilyBindingService:
                     existing_device = await self.repository.get_device_by_external_id(
                         request.device_id
                     )
-                    active_conflict = (
-                        await self.repository.find_active_binding_for_device_or_family(
-                            request.device_id, elder.id, family.id
+                    device_is_active = self._device_is_active(existing_device, now)
+                    if (
+                        device_is_active
+                        and existing_device
+                        and existing_device.elder_id != elder.id
+                    ):
+                        failure = ApiError(
+                            409,
+                            "DEVICE_BINDING_CONFLICT",
+                            "这部手机已绑定其他档案",
                         )
+
+                    binding = await self.repository.get_active_binding_for_family_elder(
+                        family.id, elder.id
                     )
-                    if (existing_device and existing_device.revoked_at is None) or active_conflict:
-                        failure = ApiError(409, "DEVICE_BINDING_CONFLICT", "这部手机已绑定其他档案")
-                    elif not await self.repository.consume_code(code_record.id, now):
+                    is_rebinding = binding is not None
+                    if failure is None and not await self.repository.consume_code(
+                        code_record.id, now
+                    ):
                         failure = ApiError(409, "BINDING_CODE_USED_OR_REVOKED", "绑定码已失效")
-                    else:
+                    elif failure is None:
                         permissions = ["VIEWER", "HELPER"]
                         if elder.emergency_contact_requested:
                             permissions.append("EMERGENCY_CONTACT")
-                        binding = await self.repository.create_binding(
-                            elder, family, permissions, "ELDER_DEVICE_BIND"
-                        )
+                        if binding is None:
+                            binding = await self.repository.create_binding(
+                                elder,
+                                family,
+                                permissions,
+                                "ELDER_DEVICE_BIND",
+                                now,
+                            )
                         credential = derive_device_credential(
                             self.settings.security_secret,
                             binding.id,
                             request.device_id,
                             request_id,
                         )
-                        await self.repository.create_or_reactivate_device(
+                        credential_digest = keyed_digest(
+                            self.settings.security_secret,
+                            "device-credential",
+                            credential,
+                        )
+                        previous_devices = await self.repository.list_unrevoked_devices_for_elder(
+                            elder.id
+                        )
+                        await self.repository.revoke_unrevoked_devices_for_elder(elder.id, now)
+                        new_device = await self.repository.create_or_reactivate_device(
                             existing_device,
                             request.device_id,
                             request.device_name,
                             elder.id,
                             binding.id,
-                            keyed_digest(
-                                self.settings.security_secret,
-                                "device-credential",
-                                credential,
-                            ),
+                            credential_digest,
                             now,
                             now + timedelta(seconds=self.settings.device_credential_ttl_seconds),
                         )
                         self.repository.add_idempotency(
-                            actor_scope, "DEVICE_BIND", request_id, binding.id
+                            actor_scope,
+                            "DEVICE_BIND",
+                            request_id,
+                            binding.id,
+                            created_at=now,
                         )
                         self.repository.add_audit(
                             "BINDING_CODE_USED",
@@ -278,19 +307,26 @@ class FamilyBindingService:
                             {"elder_id": elder.id},
                         )
                         self.repository.add_audit(
-                            "DEVICE_BOUND",
+                            "DEVICE_REBOUND" if is_rebinding else "DEVICE_BOUND",
                             "DEVICE",
-                            None,
+                            new_device.id,
                             "BINDING",
                             binding.id,
-                            {"elder_id": elder.id},
+                            {
+                                "elder_id": elder.id,
+                                "binding_id": binding.id,
+                                "previous_device_record_ids": ",".join(
+                                    device.id for device in previous_devices
+                                ),
+                                "new_device_record_id": new_device.id,
+                            },
                         )
                         response = self._bind_response(
                             binding,
                             elder,
                             family,
                             credential,
-                            ensure_utc(binding.created_at),
+                            now,
                         )
 
                 if failure is not None:
@@ -301,6 +337,12 @@ class FamilyBindingService:
         if response is None:
             raise ApiError(503, "SERVICE_TEMPORARILY_UNAVAILABLE", "服务暂时不可用")
         return response
+
+    @staticmethod
+    def _device_is_active(device: DeviceCredential | None, now: datetime) -> bool:
+        if device is None or device.revoked_at is not None:
+            return False
+        return device.expires_at is None or ensure_utc(device.expires_at) > now
 
     async def _match_code(
         self, family: FamilyAccount | None, submitted_code: str
@@ -330,7 +372,11 @@ class FamilyBindingService:
         return None
 
     async def _rebuild_bind_response(
-        self, binding_id: str, device_id: str, request_id: str
+        self,
+        binding_id: str,
+        device_id: str,
+        request_id: str,
+        bound_at: datetime,
     ) -> DeviceBindResponse:
         binding = await self.repository.get_binding(binding_id)
         if binding is None:
@@ -342,9 +388,7 @@ class FamilyBindingService:
         credential = derive_device_credential(
             self.settings.security_secret, binding.id, device_id, request_id
         )
-        return self._bind_response(
-            binding, elder, family, credential, ensure_utc(binding.created_at)
-        )
+        return self._bind_response(binding, elder, family, credential, bound_at)
 
     @staticmethod
     def _bind_response(
@@ -359,7 +403,7 @@ class FamilyBindingService:
             elder_id=UUID(elder.id),
             family_account_id=UUID(family.id),
             family_mobile_masked=family.mobile_masked,
-            relationship=binding.relationship,
+            relationship=Relationship(binding.relationship),
             permissions=binding.permissions,
             device_credential=credential,
             bound_at=bound_at,
@@ -381,7 +425,7 @@ class FamilyBindingService:
                     family_account_id=UUID(family.id),
                     family_display_name=family.display_name,
                     family_mobile_masked=family.mobile_masked,
-                    relationship=binding.relationship,
+                    relationship=Relationship(binding.relationship),
                     permissions=binding.permissions,
                     device_id=device.external_device_id if device else None,
                     device_name=device.device_name if device else None,

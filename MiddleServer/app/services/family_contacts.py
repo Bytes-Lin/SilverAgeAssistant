@@ -10,6 +10,7 @@ from app.core.errors import ApiError
 from app.core.security import ensure_utc, utc_now
 from app.models import Binding, DeviceCredential, FamilyAccount
 from app.repositories.family_contacts import FamilyContactsRepository
+from app.schemas.binding import Relationship
 from app.schemas.family_contacts import FamilyContact, FamilyContactsResponse
 
 
@@ -68,7 +69,7 @@ class FamilyContactsService:
             family_account_id=UUID(family.id),
             display_name=family.display_name,
             mobile_number=family.mobile_normalized,
-            relationship=binding.relationship,
+            relationship=Relationship(binding.relationship),
             permissions=permissions,
             emergency_contact="EMERGENCY_CONTACT" in permissions,
             bound_at=ensure_utc(binding.created_at),

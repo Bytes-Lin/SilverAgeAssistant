@@ -29,6 +29,7 @@ ViewModel
   ↓ use cases
 Domain
   ├── Agent orchestration
+  ├── Independent safety-monitoring agent
   ├── Reminder policy
   ├── Emergency policy
   └── Family communication
@@ -84,7 +85,7 @@ Android App 退到后台或被系统终止后，服务端不能保证立即唤�
 - 前台时 WebSocket；
 - App 恢复时 REST 补拉；
 - 可选 WorkManager 周期同步非紧急消息；
-- 可选带常驻通知的前台服务，仅用于受控测试，不作为默认用户体验。
+- 独立状态监控 Agent 例外使用带常驻通知的前台服务，默认开启但可由家属远程关闭或调整间隔；其他普通同步任务不默认使用常驻服务。
 
 SOS 不依赖该链路：老人手机本地拨号/短信与服务器事件并行发起。
 
@@ -117,3 +118,4 @@ FastAPI ASGI workers
 - FastAPI 不应成为模型调用单点。
 - WebSocket 不应成为消息唯一记录。
 - LLM 不直接执行系统操作，所有动作经过 Tool/Policy/Executor。
+- 状态监控 Agent 与聊天 Agent 分离，只共享模型配置、用量记录和确定性家属通知执行器；监控历史不进入聊天上下文。

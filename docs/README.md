@@ -27,8 +27,12 @@
 * [`fastapi-communication.md`](04-middle-server/fastapi-communication.md)：REST、WebSocket、事件、幂等、认证和断线恢复。
 * [`api-contract.md`](04-middle-server/api-contract.md)：FastAPI API 草案。
 * [`family-registration-and-binding-requirements.md`](04-middle-server/family-registration-and-binding-requirements.md)：家属注册、绑定码生成和手机号联合校验的中台交付需求。
+* [`device-rebinding-requirements.md`](04-middle-server/device-rebinding-requirements.md)：家属重新生成绑定码及老人设备安全恢复绑定的中台交付需求。
 * [`family-notification-and-reminder-requirements.md`](04-middle-server/family-notification-and-reminder-requirements.md)：家属通知、一次性提醒、设备补拉和 ACK 的中台交付需求。
 * [`elder-family-profile-sync-requirements.md`](04-middle-server/elder-family-profile-sync-requirements.md)：老人设备同步真实家属联系人、完整手机号和权限快照的中台交付需求。
+* [`remote-model-configuration-requirements.md`](04-middle-server/remote-model-configuration-requirements.md)：家属远程下发非敏感模型配置、老人设备补拉和 API Key 安全边界。
+* [`model-usage-reporting-requirements.md`](04-middle-server/model-usage-reporting-requirements.md)：老人设备每小时汇报聚合用量、家属查询汇总和隐私边界。
+* [`safety-monitoring-and-events-requirements.md`](04-middle-server/safety-monitoring-and-events-requirements.md)：状态检测间隔下发、结构化异常事件、家属今日补拉和首次 ACK 的中台交付需求。
 
 ## 05 安全
 
@@ -49,6 +53,7 @@
 ## 08 路线图
 
 * [`roadmap.md`](08-roadmap/roadmap.md)：从工程初始化到试点的阶段规划。
+* [`todo.md`](08-roadmap/todo.md)：按当前代码核对的已完成与待开发功能清单。
 
 ## 99 附录
 

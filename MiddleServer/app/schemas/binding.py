@@ -69,7 +69,7 @@ class DeviceBindResponse(StrictSchema):
     relationship: Relationship
     permissions: list[str]
     device_credential: str
-    bound_at: datetime
+    bound_at: datetime = Field(description="本次设备凭据生效时间")
 
 
 class BindingResponse(StrictSchema):

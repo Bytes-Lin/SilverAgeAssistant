@@ -22,6 +22,8 @@ import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Emergency
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -44,6 +46,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.example.silverageassistant.ui.components.ElderScreenScaffold
+import com.example.silverageassistant.ui.components.LargeActionButton
 import com.example.silverageassistant.ui.onboarding.BindingPreparationStatus
 import com.example.silverageassistant.ui.onboarding.FamilySetupDraft
 import com.example.silverageassistant.ui.onboarding.SessionConnectionStatus
@@ -66,14 +69,28 @@ fun FamilyHomeScreen(
     lastSyncedAt: String?,
     sessionConnectionStatus: SessionConnectionStatus,
     sessionMessage: String?,
+    isRegeneratingBindingCode: Boolean,
+    operationMessage: String?,
     onEditProfile: () -> Unit,
+    onRegenerateBindingCode: () -> Unit,
     onSendNotification: () -> Unit,
     onCreateReminder: () -> Unit,
+    onModelConfiguration: () -> Unit,
+    onModelUsage: () -> Unit,
+    onTodayStatus: () -> Unit,
+    onSafetyMonitoringConfiguration: () -> Unit,
+    onEmergencyEvents: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var unavailableMessage by rememberSaveable { mutableStateOf<String?>(null) }
     val actions = listOf(
-        FamilyFeatureAction("今日状态", "查看老人主动同步的状态", Icons.Rounded.Favorite),
+        FamilyFeatureAction(
+            "今日状态",
+            "查看老人今天的一般状态通知",
+            Icons.Rounded.Favorite,
+            onTodayStatus,
+            requiresBinding = true,
+        ),
         FamilyFeatureAction("提醒记录", "查看提醒确认时间线", Icons.AutoMirrored.Rounded.EventNote),
         FamilyFeatureAction(
             "发送通知",
@@ -89,8 +106,34 @@ fun FamilyHomeScreen(
             onCreateReminder,
             requiresBinding = true,
         ),
-        FamilyFeatureAction("模型用量", "查看客户端上报的估算", Icons.Rounded.BarChart),
-        FamilyFeatureAction("紧急事件", "查看并处理老人主动求助", Icons.Rounded.Emergency),
+        FamilyFeatureAction(
+            "模型配置",
+            "为老人设置模型地址和生成参数",
+            Icons.Rounded.Settings,
+            onModelConfiguration,
+            requiresBinding = true,
+        ),
+        FamilyFeatureAction(
+            "模型用量",
+            "查看输入、输出与语音调用次数",
+            Icons.Rounded.BarChart,
+            onModelUsage,
+            requiresBinding = true,
+        ),
+        FamilyFeatureAction(
+            "状态检测设置",
+            "设置老人手机的安全检测间隔",
+            Icons.Rounded.Settings,
+            onSafetyMonitoringConfiguration,
+            requiresBinding = true,
+        ),
+        FamilyFeatureAction(
+            "紧急事件",
+            "查看疑似跌倒、晕倒等紧急通知",
+            Icons.Rounded.Emergency,
+            onEmergencyEvents,
+            requiresBinding = true,
+        ),
     )
 
     ElderScreenScaffold(
@@ -125,6 +168,9 @@ fun FamilyHomeScreen(
                     lastSyncedAt = lastSyncedAt,
                     sessionConnectionStatus = sessionConnectionStatus,
                     sessionMessage = sessionMessage,
+                    isRegeneratingBindingCode = isRegeneratingBindingCode,
+                    operationMessage = operationMessage,
+                    onRegenerateBindingCode = onRegenerateBindingCode,
                 )
             }
             item {
@@ -177,6 +223,9 @@ private fun ConnectionStatusCard(
     lastSyncedAt: String?,
     sessionConnectionStatus: SessionConnectionStatus,
     sessionMessage: String?,
+    isRegeneratingBindingCode: Boolean,
+    operationMessage: String?,
+    onRegenerateBindingCode: () -> Unit,
 ) {
     val isConnected = bindingStatus == BindingPreparationStatus.CodeGenerated ||
         bindingStatus == BindingPreparationStatus.Bound
@@ -209,7 +258,7 @@ private fun ConnectionStatusCard(
             if (sessionMessage != null) {
                 Text(sessionMessage, style = MaterialTheme.typography.bodyMedium)
             }
-            if (bindingStatus == BindingPreparationStatus.CodeGenerated && bindingCode != null) {
+            if (bindingCode != null) {
                 Text("绑定码：$bindingCode", style = MaterialTheme.typography.headlineMedium)
                 if (bindingCodeExpiresAt != null) {
                     Text("请尽快使用，过期后需重新生成。", style = MaterialTheme.typography.bodyMedium)
@@ -221,6 +270,29 @@ private fun ConnectionStatusCard(
                 if (lastSyncedAt == null) "最后同步：从未同步" else "最后同步：刚刚",
                 style = MaterialTheme.typography.bodyMedium,
             )
+            Spacer(modifier = Modifier.height(ElderSpacing.small))
+            LargeActionButton(
+                text = if (isRegeneratingBindingCode) {
+                    "正在生成新绑定码"
+                } else {
+                    "重新生成绑定码"
+                },
+                onClick = onRegenerateBindingCode,
+                icon = Icons.Rounded.Refresh,
+                contentDescription = "向中台重新申请老人绑定码",
+                enabled = !isRegeneratingBindingCode &&
+                    sessionConnectionStatus != SessionConnectionStatus.Invalid,
+                outlined = true,
+            )
+            if (operationMessage != null) {
+                Text(
+                    text = operationMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .padding(top = ElderSpacing.small)
+                        .semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
         }
     }
 }

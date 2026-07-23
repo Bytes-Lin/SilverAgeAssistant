@@ -7,6 +7,8 @@ import com.example.silverageassistant.data.contacts.FamilyContactStore
 import com.example.silverageassistant.data.middleserver.ElderFamilyContactsRepository
 import com.example.silverageassistant.data.middleserver.FamilyContactProfile
 import com.example.silverageassistant.data.middleserver.MiddleServerRequestException
+import com.example.silverageassistant.domain.agent.AgentLongTermMemory
+import com.example.silverageassistant.domain.agent.MemoryFamilyContact
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +29,7 @@ class FamilyContactsViewModel(
     private val store: FamilyContactStore? = null,
     private val repository: ElderFamilyContactsRepository? = null,
     externalScope: CoroutineScope? = null,
+    private val agentLongTermMemory: AgentLongTermMemory? = null,
 ) : ViewModel() {
     private val workScope = externalScope ?: viewModelScope
     private val _uiState = MutableStateFlow(FamilyContactsUiState(isLoadingLocal = store != null))
@@ -38,6 +41,13 @@ class FamilyContactsViewModel(
         if (store != null) {
             localLoadJob = workScope.launch {
                 val cached = runCatching { store.load() }.getOrNull()
+                if (cached != null) {
+                    runCatching {
+                        agentLongTermMemory?.replaceFamilyContacts(
+                            cached.contacts.map(FamilyContactProfile::toMemoryContact),
+                        )
+                    }
+                }
                 _uiState.value = _uiState.value.copy(
                     contacts = cached?.contacts.orEmpty(),
                     lastSyncedAt = cached?.syncedAt,
@@ -61,6 +71,11 @@ class FamilyContactsViewModel(
             try {
                 val snapshot = remoteRepository.getFamilyContacts()
                 localStore.save(snapshot)
+                runCatching {
+                    agentLongTermMemory?.replaceFamilyContacts(
+                        snapshot.contacts.map(FamilyContactProfile::toMemoryContact),
+                    )
+                }
                 _uiState.value = _uiState.value.copy(
                     contacts = snapshot.contacts,
                     isLoadingLocal = false,
@@ -79,6 +94,7 @@ class FamilyContactsViewModel(
                     error.code == "BINDING_REVOKED"
                 ) {
                     localStore.clear()
+                    runCatching { agentLongTermMemory?.clearFamilyContacts() }
                     _uiState.value = _uiState.value.copy(
                         contacts = emptyList(),
                         isLoadingLocal = false,
@@ -108,11 +124,23 @@ class FamilyContactsViewModel(
     class Factory(
         private val store: FamilyContactStore,
         private val repository: ElderFamilyContactsRepository?,
+        private val agentLongTermMemory: AgentLongTermMemory? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(FamilyContactsViewModel::class.java))
-            return FamilyContactsViewModel(store, repository) as T
+            return FamilyContactsViewModel(
+                store = store,
+                repository = repository,
+                agentLongTermMemory = agentLongTermMemory,
+            ) as T
         }
     }
 }
+
+private fun FamilyContactProfile.toMemoryContact() = MemoryFamilyContact.fromSensitiveContact(
+    displayName = displayName,
+    relationship = relationship,
+    mobileNumber = mobileNumber,
+    emergencyContact = emergencyContact,
+)

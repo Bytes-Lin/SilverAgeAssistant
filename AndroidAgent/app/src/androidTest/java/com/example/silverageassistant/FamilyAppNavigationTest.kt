@@ -58,6 +58,8 @@ class FamilyAppNavigationTest {
         composeRule.onNodeWithText("已连接中台").assertIsDisplayed()
         composeRule.onNodeWithText("绑定码：654321").assertIsDisplayed()
         composeRule.onNodeWithText("王阿姨").assertIsDisplayed()
+        composeRule.onNodeWithText("重新生成绑定码").performScrollTo().performClick()
+        composeRule.onNodeWithText("绑定码：112233").assertIsDisplayed()
     }
 
     private object SuccessfulOnboardingRepository : OnboardingMiddleServerRepository {
@@ -67,6 +69,14 @@ class FamilyAppNavigationTest {
             bindingCode = "654321",
             bindingCodeExpiresAt = "2026-07-16T12:00:00Z",
             familyMobileMasked = "133****3333",
+            elderId = "elder-1",
+        )
+
+        override suspend fun regenerateBindingCode(elderId: String) = FamilyOnboardingResult(
+            bindingCode = "112233",
+            bindingCodeExpiresAt = "2026-07-17T12:00:00Z",
+            familyMobileMasked = "133****3333",
+            elderId = elderId,
         )
 
         override suspend fun bindElderDevice(request: ElderBindingRequest) = ElderBindingResult(

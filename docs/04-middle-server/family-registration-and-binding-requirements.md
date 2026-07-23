@@ -246,6 +246,8 @@ ElderUnbound
 - 手机号必须以规范化值建立索引，展示值与规范化值分离；
 - 绑定关系至少保存 `binding_id`、`elder_id`、`family_account_id`、关系、权限、创建时间、撤销时间和审计来源。
 
+已存在有效绑定时的换机或本地凭据丢失恢复已通过受控规则实现，不由首次绑定规则隐式接管其他老人档案。重新生成绑定码与设备凭据原子轮换的完整流程见 [`device-rebinding-requirements.md`](device-rebinding-requirements.md)。
+
 ## 9. OpenAPI 与自动化验收
 
 中台交付至少覆盖：

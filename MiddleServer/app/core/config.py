@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     command_client_clock_skew_seconds: int = 300
     command_per_minute_limit: int = 10
     command_per_day_limit: int = 200
+    usage_refresh_min_interval_seconds: int = 3
+    safety_event_future_tolerance_seconds: int = 600
+    safety_event_max_age_days: int = 7
+    safety_event_per_minute_limit: int = 30
+    safety_image_storage_path: str = "./private/safety-event-images"
+    safety_image_max_bytes: int = 8 * 1024 * 1024
+    safety_image_thumbnail_max_pixels: int = 512
+    safety_image_retention_days: int = 7
+    safety_image_cleanup_interval_seconds: int = 3600
+    safety_image_download_per_minute_limit: int = 60
 
     @model_validator(mode="after")
     def reject_development_secrets_outside_development(self) -> "Settings":

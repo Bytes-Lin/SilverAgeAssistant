@@ -10,7 +10,7 @@
 - HTTPS REST + WSS WebSocket
 - pytest + Ruff + 类型检查
 
-当前首版按单进程、轻量本地开发设计，不引入 PostgreSQL、Redis 或数据库 Docker 依赖。M04 已实现家属注册、老人档案、一次性绑定码、设备凭证、绑定查询、家属联系人完整快照，以及家属通知/一次性提醒的创建、补拉、ACK 和在线提示子任务。
+当前首版按单进程、轻量本地开发设计，不引入 PostgreSQL、Redis 或数据库 Docker 依赖。M04 已实现家属注册、老人档案、一次性绑定码、设备凭证、已有绑定下的原子凭据轮换、绑定查询、家属联系人完整快照、含上下文窗口的非敏感模型配置同步、带老人位置时区的模型用量批量上报、家属汇总与每日分桶查询、在线即时刷新、家属通知/一次性提醒，以及包含 `enabled` 启停与间隔的状态检测配置下发、结构化安全事件和私有证据图像。
 
 ## 2. 服务器职责
 
@@ -26,6 +26,20 @@
 
 不负责 LLM/ASR/TTS 代理，不保存老人 API Key。
 
+模型用量由老人设备本地全局账本记录，并通过 WorkManager 每小时向 `POST /api/v1/model-usage/batches` 汇报聚合数字；家属通过受绑定权限保护的汇总接口查询。中台不得接收提示词、回复、Tool 内容、音频或 API Key。详细契约见 [`model-usage-reporting-requirements.md`](model-usage-reporting-requirements.md)。
+
+用量批次与聚合明细可靠写入 SQLite；服务端从 device credential 推导老人和设备身份，以
+`batch_id` 做全局幂等，并按客户端事件时间筛选家属查询区间。相同批次重试不会重复累计，
+家属接口只返回 MLLM/ASR/TTS 汇总和最后上报时间，不提供单次调用时间线。
+家属端的今日统计与月度柱状图使用每日分桶接口。老人设备随批次上报由当前位置
+天气响应推导的 IANA 时区；中台按老人最近的位置时区返回当地当前自然月并补齐零用量
+日期。后续设备系统兜底时区不会覆盖已保存的位置时区；家属端不得传入自己的时区，
+避免异地家属改变老人每日边界。
+家属点击“立即刷新用量”时，Android 调用刷新 REST 接口；中台向在线老人设备
+发送 `MODEL_USAGE_REPORT_REQUESTED`，老人端立即排入一次性 WorkManager 上传并与
+小时任务共用幂等批次。中台持久化刷新幂等结果并执行同一家属、同一老人 3 秒限流；
+老人设备离线时返回 `device_online=false` 并只展示上次汇报值。详细契约见用量需求文档第 5 节。
+
 ## 3. 协议组合
 
 ### REST
@@ -34,7 +48,21 @@
 
 ### WebSocket
 
-用于双方在线时的低延迟“有新事件”通知。当前 `/api/v1/ws` 先实现老人设备 `COMMAND_AVAILABLE`，消息中只携带 `command_id`、类型和序列号，客户端随后通过 REST 获取详情；通用事件 WebSocket 信封仍属于后续任务。
+用于双方在线时的低延迟“有新事件”通知。当前 `/api/v1/ws` 已实现老人设备
+`COMMAND_AVAILABLE`，消息中只携带 `command_id`、类型和序列号，客户端随后通过
+REST 获取详情。用量即时刷新复用该连接发送 `MODEL_USAGE_REPORT_REQUESTED`，只向
+仍持有有效 device credential 的在线老人设备投递。状态检测配置更新同样只向有效老人
+设备发送 `SAFETY_MONITORING_CONFIG_AVAILABLE`。家属可使用短期 access token 建立同一路径
+连接；安全事件提交并落库后，仅向存在有效绑定和查看权限的家属发送
+`SAFETY_EVENT_AVAILABLE`，提示中不包含事件摘要。
+事件证据图像通过独立二进制 REST 接口上传和读取，不进入 WebSocket。图像保存并生成缩略图后，
+中台向有权限的在线家属发送 `SAFETY_EVENT_IMAGE_AVAILABLE`，只携带 `elder_id` 和 `event_id`；
+家属端再次 REST 补拉事件元数据，再按需读取缩略图或原图。
+
+聊天 Agent 的 `report_family_situation` 与后续状态监控 Agent 复用同一设备事件接口。中台
+允许 `HEALTH_DISCOMFORT_REPORTED` 和 `FAMILY_REQUEST` 使用忠实描述老人原话的摘要；
+传感/模型异常类型仍必须使用“疑似”或“需要核实”。服务端根据事件类型重新确定严重级别，
+避免模型把普通家属请求升级为紧急事件，或把身体不适和异常检测降级为一般事件。
 
 ### 重连补偿
 
@@ -120,13 +148,21 @@ Event
 
 老人设备的家属联系人使用独立完整快照：`GET /api/v1/devices/me/family-contacts` 根据 device credential 确定老人档案并投影当前有效绑定资料。接口已实现稳定快照摘要、完整手机号白名单、活跃绑定过滤、脱敏审计和 `no-store` 缓存策略。完整契约见 [`elder-family-profile-sync-requirements.md`](elder-family-profile-sync-requirements.md)。
 
+非敏感模型配置采用每位老人一份当前配置和单调递增 revision。家属使用
+`PUT /api/v1/elders/{elder_id}/model-config` 可靠写入，老人设备使用
+`GET /api/v1/devices/me/model-config` 补拉；历史幂等响应单独保存，API Key 和
+Authorization 等模型凭证不进入请求 schema、数据库、审计或响应。完整契约见
+[`remote-model-configuration-requirements.md`](remote-model-configuration-requirements.md)。
+配置中的 `context_window_tokens` 已纳入 revision、幂等摘要和双方读取响应；既有 SQLite
+配置在迁移时回填为 32768。
+
 ## 7. 认证
 
 家属：轻量联调版使用自报手机号直接注册 → access token + refresh token。当前不提供开发验证令牌接口，也不代表手机号真实性已经验证；正式对外部署前再接入真实验证 Provider。
 
-老人设备：绑定码换取 device credential；凭证与设备、老人档案绑定，可吊销。
+老人设备：绑定码换取 device credential；凭证与设备、老人档案绑定，可吊销。重新生成绑定码不会立即影响旧凭据；新设备成功完成联合校验后，中台才在同一事务中撤销旧凭据并签发新凭据。
 
-当前老人设备 WebSocket 使用 `Authorization: Bearer <device_credential>` 请求头认证。后续家属 WebSocket 可使用短期 access token 或握手后的认证消息；禁止在 URL 查询参数暴露 Refresh Token 或 device credential。
+当前老人设备 WebSocket 使用 `Authorization: Bearer <device_credential>` 请求头认证；家属 WebSocket 使用短期 `family_access` token。两者均禁止在 URL 查询参数暴露 Refresh Token 或 device credential。
 
 ## 8. 权限
 
@@ -193,5 +229,14 @@ MiddleServer/app/
 - `SILVERAGE_COMMAND_DEFAULT_TIMEZONE`：即时通知的默认 IANA 时区，默认 `Asia/Shanghai`；
 - `SILVERAGE_COMMAND_PER_MINUTE_LIMIT`：单家属对单老人每分钟命令上限，默认 10；
 - `SILVERAGE_COMMAND_PER_DAY_LIMIT`：单家属对单老人 24 小时命令上限，默认 200。
+- `SILVERAGE_SAFETY_EVENT_FUTURE_TOLERANCE_SECONDS`：安全事件未来时间容差，默认 600 秒；
+- `SILVERAGE_SAFETY_EVENT_MAX_AGE_DAYS`：可补传安全事件的最大年龄，默认 7 天；
+- `SILVERAGE_SAFETY_EVENT_PER_MINUTE_LIMIT`：单设备每分钟安全事件上限，默认 30；
+- `SILVERAGE_SAFETY_IMAGE_STORAGE_PATH`：安全事件图像私有存储目录，默认 `./private/safety-event-images`；
+- `SILVERAGE_SAFETY_IMAGE_MAX_BYTES`：单张原始上传最大字节数，默认 8 MiB；
+- `SILVERAGE_SAFETY_IMAGE_THUMBNAIL_MAX_PIXELS`：缩略图最长边，默认 512px；
+- `SILVERAGE_SAFETY_IMAGE_RETENTION_DAYS`：原图和缩略图保留天数，默认 7 天；
+- `SILVERAGE_SAFETY_IMAGE_CLEANUP_INTERVAL_SECONDS`：过期图像清理周期，默认 3600 秒；
+- `SILVERAGE_SAFETY_IMAGE_DOWNLOAD_PER_MINUTE_LIMIT`：单家属、单事件每分钟图片读取上限，默认 60。
 
 仓库内的默认密钥只允许本机开发。非 development 环境若仍使用默认密钥，服务将拒绝启动。真实部署必须由 TLS 反向代理提供 HTTPS。

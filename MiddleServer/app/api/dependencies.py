@@ -13,6 +13,7 @@ from app.core.security import decode_jwt, keyed_digest
 from app.models import DeviceCredential, FamilyAccount
 from app.repositories.family_binding import FamilyBindingRepository
 from app.services.family_binding import AuthContext
+from app.services.safety_image_storage import SafetyImageStorage
 from app.websocket.manager import ConnectionManager
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -28,6 +29,10 @@ def get_request_settings(connection: HTTPConnection) -> Settings:
 
 def get_connection_manager(connection: HTTPConnection) -> ConnectionManager:
     return cast(ConnectionManager, connection.app.state.connection_manager)
+
+
+def get_safety_image_storage(connection: HTTPConnection) -> SafetyImageStorage:
+    return cast(SafetyImageStorage, connection.app.state.safety_image_storage)
 
 
 async def get_session(database: Database = Depends(get_database)) -> AsyncIterator[AsyncSession]:

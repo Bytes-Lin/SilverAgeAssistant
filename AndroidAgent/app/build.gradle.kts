@@ -44,9 +44,28 @@ android {
                     ),
                 ),
             )
+            buildConfigField(
+                "String",
+                "MODEL_BASE_URL",
+                buildConfigString(
+                    developmentProperties.getProperty(
+                        "modelBaseUrl",
+                        "http://58.199.163.98:11435",
+                    ),
+                ),
+            )
+            buildConfigField(
+                "String",
+                "CHAT_MODEL",
+                buildConfigString(
+                    developmentProperties.getProperty("chatModel", "qwen3_5"),
+                ),
+            )
         }
         release {
             buildConfigField("String", "MIDDLE_SERVER_BASE_URL", "\"\"")
+            buildConfigField("String", "MODEL_BASE_URL", "\"\"")
+            buildConfigField("String", "CHAT_MODEL", "\"\"")
             optimization {
                 enable = false
             }
@@ -59,6 +78,9 @@ android {
     buildFeatures {
         buildConfig = true
         compose = true
+    }
+    sourceSets {
+        getByName("main").assets.directories.add(rootProject.file("assets").absolutePath)
     }
 }
 
@@ -78,6 +100,9 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.okhttp)
+    implementation(libs.kotlinx.serialization.json)
     ksp(libs.androidx.room.compiler)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

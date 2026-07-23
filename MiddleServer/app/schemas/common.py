@@ -9,6 +9,7 @@ class ErrorBody(StrictSchema):
     code: str
     message: str
     request_id: str
+    details: dict[str, object] | None = None
 
 
 class ErrorResponse(StrictSchema):

@@ -38,7 +38,7 @@ Thumbs.db
 bug/
 
 # Local models and generated media
-models/
+/models/
 *.gguf
 recordings/
 uploads/
@@ -52,3 +52,4 @@ MiddleServer/redis-data/
 MiddleServer/*.db
 MiddleServer/*.db-shm
 MiddleServer/*.db-wal
+MiddleServer/private/

@@ -20,6 +20,7 @@ async def api(tmp_path: Path) -> AsyncIterator[tuple[AsyncClient, FastAPI, Setti
         jwt_secret="test-jwt-secret-with-enough-entropy",
         security_secret="test-security-secret-with-enough-entropy",
         binding_failure_limit=5,
+        safety_image_storage_path=str(tmp_path / "safety-images"),
     )
     app = create_app(settings)
     async with LifespanManager(app):
