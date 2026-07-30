@@ -21,8 +21,9 @@ from app.schemas.common import ErrorResponse
 from app.schemas.safety_monitoring import (
     SafetyEventAcknowledgementRequest,
     SafetyEventCreateRequest,
+    SafetyEventResolutionRequest,
     SafetyEventResponse,
-    SafetyEventsTodayResponse,
+    SafetyEventsResponse,
     SafetyMonitoringConfigurationResponse,
     SafetyMonitoringConfigurationUpdateRequest,
 )
@@ -157,24 +158,56 @@ async def create_safety_event(
 
 @router.get(
     "/elders/{elder_id}/safety-events",
-    response_model=SafetyEventsTodayResponse,
+    response_model=SafetyEventsResponse,
     responses=error_responses,
-    summary="Get today's safety events for an elder",
+    summary="Get active safety events for an elder",
 )
-async def get_today_safety_events(
+async def get_safety_events(
     elder_id: UUID,
     response: Response,
-    scope: Annotated[Literal["today"], Query()] = "today",
+    scope: Annotated[
+        str,
+        Query(json_schema_extra={"enum": ["today", "active_emergencies"]}),
+    ] = "today",
     family: FamilyAccount = Depends(get_current_family),
     session: AsyncSession = Depends(get_session),
     database: Database = Depends(get_database),
     settings: Settings = Depends(get_request_settings),
     manager: ConnectionManager = Depends(get_connection_manager),
     image_storage: SafetyImageStorage = Depends(get_safety_image_storage),
-) -> SafetyEventsTodayResponse:
-    del scope
-    result = await service(session, database, settings, manager, image_storage).get_today_events(
-        family, str(elder_id)
+) -> SafetyEventsResponse:
+    result = await service(session, database, settings, manager, image_storage).get_events(
+        family, str(elder_id), scope
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post(
+    "/elders/{elder_id}/safety-events/{event_id}/resolve",
+    response_model=SafetyEventResponse,
+    responses=error_responses,
+    summary="Mark a safety event as resolved without deleting it",
+)
+async def resolve_safety_event(
+    elder_id: UUID,
+    event_id: UUID,
+    payload: SafetyEventResolutionRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    response: Response,
+    family: FamilyAccount = Depends(get_current_family),
+    session: AsyncSession = Depends(get_session),
+    database: Database = Depends(get_database),
+    settings: Settings = Depends(get_request_settings),
+    manager: ConnectionManager = Depends(get_connection_manager),
+    image_storage: SafetyImageStorage = Depends(get_safety_image_storage),
+) -> SafetyEventResponse:
+    result = await service(session, database, settings, manager, image_storage).resolve_event(
+        family,
+        str(elder_id),
+        str(event_id),
+        payload,
+        idempotency_key,
     )
     response.headers["Cache-Control"] = "no-store"
     return result

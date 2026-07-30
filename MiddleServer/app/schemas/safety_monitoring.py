@@ -14,6 +14,7 @@ class SafetyEventType(StrEnum):
     FALL_SUSPECTED = "FALL_SUSPECTED"
     UNCONSCIOUSNESS_SUSPECTED = "UNCONSCIOUSNESS_SUSPECTED"
     OTHER_ABNORMALITY = "OTHER_ABNORMALITY"
+    GUI_ORDER_ASSISTANCE_REQUIRED = "GUI_ORDER_ASSISTANCE_REQUIRED"
 
 
 class SafetyEventSeverity(StrEnum):
@@ -76,13 +77,14 @@ class SafetyEventResponse(StrictSchema):
     event_summary: str
     severity: SafetyEventSeverity
     acknowledged_at: datetime | None
+    resolved_at: datetime | None
     created_at: datetime
     image_available: bool
     image_content_type: str | None
     image_byte_size: int | None
 
 
-class SafetyEventsTodayResponse(StrictSchema):
+class SafetyEventsResponse(StrictSchema):
     current_date: date
     timezone: str
     events: list[SafetyEventResponse]
@@ -90,4 +92,8 @@ class SafetyEventsTodayResponse(StrictSchema):
 
 
 class SafetyEventAcknowledgementRequest(StrictSchema):
+    client_request_id: UUID
+
+
+class SafetyEventResolutionRequest(StrictSchema):
     client_request_id: UUID

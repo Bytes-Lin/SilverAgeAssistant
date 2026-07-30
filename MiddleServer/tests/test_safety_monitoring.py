@@ -241,12 +241,14 @@ async def test_event_persists_before_hint_and_is_idempotent(api: ApiFixture) -> 
         "event_summary",
         "severity",
         "acknowledged_at",
+        "resolved_at",
         "created_at",
         "image_available",
         "image_content_type",
         "image_byte_size",
     }
     assert body["image_available"] is False
+    assert body["resolved_at"] is None
     assert body["image_content_type"] is None
     assert body["image_byte_size"] is None
     notifier = app.state.connection_manager.notify_safety_event_available
@@ -295,15 +297,35 @@ async def test_elder_reports_health_and_family_request_with_server_severity_poli
             summary="老人想让儿子回家吃饭",
         ),
     )
+    gui_assistance_payload = event_payload(
+        "b2100000-0000-4000-8000-000000000003",
+        event_type="GUI_ORDER_ASSISTANCE_REQUIRED",
+        severity="GENERAL",
+        summary="已选好清淡午餐但页面操作超时，请家属协助完成点单。",
+    )
+    gui_assistance = await post_event(
+        client,
+        bound["device_credential"],
+        gui_assistance_payload,
+    )
+    gui_retry = await post_event(
+        client,
+        bound["device_credential"],
+        gui_assistance_payload,
+    )
 
-    assert health.status_code == family_request.status_code == 201
+    assert health.status_code == family_request.status_code == gui_assistance.status_code == 201
+    assert gui_retry.status_code == 201
+    assert gui_retry.json() == gui_assistance.json()
     assert health.json()["event_type"] == "HEALTH_DISCOMFORT_REPORTED"
     assert health.json()["severity"] == "EMERGENCY"
     assert family_request.json()["event_type"] == "FAMILY_REQUEST"
     assert family_request.json()["severity"] == "GENERAL"
+    assert gui_assistance.json()["event_type"] == "GUI_ORDER_ASSISTANCE_REQUIRED"
+    assert gui_assistance.json()["severity"] == "EMERGENCY"
 
     notifier = app.state.connection_manager.notify_safety_event_available
-    assert notifier.await_count == 2
+    assert notifier.await_count == 3
     assert notifier.await_args_list[0].args[1] == elder["elder_id"]
     assert notifier.await_args_list[0].args[4] == "EMERGENCY"
     assert notifier.await_args_list[1].args[4] == "GENERAL"
@@ -315,6 +337,7 @@ async def test_elder_reports_health_and_family_request_with_server_severity_poli
         assert [(event.event_type, event.severity) for event in stored] == [
             ("HEALTH_DISCOMFORT_REPORTED", "EMERGENCY"),
             ("FAMILY_REQUEST", "GENERAL"),
+            ("GUI_ORDER_ASSISTANCE_REQUIRED", "EMERGENCY"),
         ]
 
 
@@ -424,6 +447,156 @@ async def test_first_acknowledgement_is_immutable_and_access_is_enforced(
         stored = await session.get(SafetyEvent, event_id)
         assert stored is not None
         assert stored.acknowledged_by_family_account_id == family["family_account_id"]
+
+
+async def test_resolve_is_idempotent_authorized_and_removes_event_from_active_scopes(
+    api: ApiFixture,
+) -> None:
+    client, app, _ = api
+    family, elder, bound = await prepared_binding(client)
+    app.state.connection_manager.notify_safety_event_available = AsyncMock(return_value=True)
+    yesterday = (utc_now() - timedelta(days=1)).isoformat().replace("+00:00", "Z")
+    created = await post_event(
+        client,
+        bound["device_credential"],
+        event_payload(
+            "b4000000-0000-4000-8000-000000000001",
+            occurred_at=yesterday,
+        ),
+    )
+    assert created.status_code == 201
+    event_id = created.json()["event_id"]
+    today_created = await post_event(
+        client,
+        bound["device_credential"],
+        event_payload(
+            "b4000000-0000-4000-8000-000000000006",
+            event_type="FAMILY_REQUEST",
+            severity="EMERGENCY",
+            summary="老人想请家属晚上打个电话",
+        ),
+    )
+    assert today_created.status_code == 201
+    today_event_id = today_created.json()["event_id"]
+
+    active_path = f"/api/v1/elders/{elder['elder_id']}/safety-events"
+    family_headers = {"Authorization": f"Bearer {family['access_token']}"}
+    today_before = await client.get(
+        active_path,
+        headers=family_headers,
+        params={"scope": "today"},
+    )
+    assert today_before.status_code == 200
+    assert today_event_id in {event["event_id"] for event in today_before.json()["events"]}
+    today_resolve_request_id = "b4000000-0000-4000-8000-000000000007"
+    today_resolved = await client.post(
+        f"/api/v1/elders/{elder['elder_id']}/safety-events/{today_event_id}/resolve",
+        headers={
+            **family_headers,
+            "Idempotency-Key": today_resolve_request_id,
+        },
+        json={"client_request_id": today_resolve_request_id},
+    )
+    assert today_resolved.status_code == 200
+    today_after = await client.get(
+        active_path,
+        headers=family_headers,
+        params={"scope": "today"},
+    )
+    assert today_event_id not in {event["event_id"] for event in today_after.json()["events"]}
+
+    before = await client.get(
+        active_path,
+        headers=family_headers,
+        params={"scope": "active_emergencies"},
+    )
+    assert before.status_code == 200
+    assert [event["event_id"] for event in before.json()["events"]] == [event_id]
+
+    unrelated = await register_family(
+        client,
+        mobile="13700137001",
+        request_id="b4000000-0000-4000-8000-000000000002",
+    )
+    forbidden_request_id = "b4000000-0000-4000-8000-000000000003"
+    resolve_path = f"/api/v1/elders/{elder['elder_id']}/safety-events/{event_id}/resolve"
+    forbidden = await client.post(
+        resolve_path,
+        headers={
+            "Authorization": f"Bearer {unrelated['access_token']}",
+            "Idempotency-Key": forbidden_request_id,
+        },
+        json={"client_request_id": forbidden_request_id},
+    )
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"]["code"] == "SAFETY_EVENT_FORBIDDEN"
+
+    request_id = "b4000000-0000-4000-8000-000000000004"
+    resolve_headers = {
+        **family_headers,
+        "Idempotency-Key": request_id,
+    }
+    first = await client.post(
+        resolve_path,
+        headers=resolve_headers,
+        json={"client_request_id": request_id},
+    )
+    retry = await client.post(
+        resolve_path,
+        headers=resolve_headers,
+        json={"client_request_id": request_id},
+    )
+    assert first.status_code == retry.status_code == 200
+    assert first.json() == retry.json()
+    assert first.json()["resolved_at"] is not None
+    first_resolved_at = first.json()["resolved_at"]
+
+    another_request_id = "b4000000-0000-4000-8000-000000000005"
+    already_resolved = await client.post(
+        resolve_path,
+        headers={
+            **family_headers,
+            "Idempotency-Key": another_request_id,
+        },
+        json={"client_request_id": another_request_id},
+    )
+    assert already_resolved.status_code == 200
+    assert already_resolved.json()["resolved_at"] == first_resolved_at
+
+    for scope in ("today", "active_emergencies"):
+        after = await client.get(active_path, headers=family_headers, params={"scope": scope})
+        assert after.status_code == 200
+        assert event_id not in {event["event_id"] for event in after.json()["events"]}
+
+    conflict = await client.post(
+        f"/api/v1/elders/{elder['elder_id']}/safety-events/{uuid4()}/resolve",
+        headers=resolve_headers,
+        json={"client_request_id": request_id},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
+
+    invalid_scope = await client.get(
+        active_path,
+        headers=family_headers,
+        params={"scope": "history"},
+    )
+    assert invalid_scope.status_code == 400
+    assert invalid_scope.json()["error"]["code"] == "INVALID_SAFETY_EVENT_SCOPE"
+
+    async with app.state.database.session_factory() as session:
+        stored = await session.get(SafetyEvent, event_id)
+        assert stored is not None
+        assert stored.resolved_by_family_account_id == family["family_account_id"]
+        assert stored.resolved_at is not None
+        assert f"{stored.resolved_at.isoformat()}Z" == first_resolved_at
+        audit_count = await session.scalar(
+            select(func.count(AuditLog.id)).where(
+                AuditLog.action == "SAFETY_EVENT_RESOLVED",
+                AuditLog.resource_id == event_id,
+            )
+        )
+        assert audit_count == 1
 
 
 def test_websocket_delivers_minimal_config_and_event_hints(tmp_path: Path) -> None:

@@ -93,8 +93,10 @@ GET  /devices/me/safety-monitoring/config
 POST /devices/me/safety-events
 PUT  /devices/me/safety-events/{event_id}/image
 GET  /elders/{elder_id}/safety-events?scope=today
+GET  /elders/{elder_id}/safety-events?scope=active_emergencies
 GET  /elders/{elder_id}/safety-events/{event_id}/image?variant=thumbnail|original
 POST /elders/{elder_id}/safety-events/{event_id}/acknowledge
+POST /elders/{elder_id}/safety-events/{event_id}/resolve
 WS   /ws
 ```
 
@@ -107,12 +109,15 @@ revision 乐观锁和 `Idempotency-Key`，冲突响应的 `error.details.current
 运行中修改间隔不清空六小时检测历史；关闭清空历史并停止图像/MLLM 分析，但老人设备保留
 配置监听以便实时重新开启。
 
-老人设备使用 device credential 提交五种结构化事件：老人主动报告身体不适、向家属提出
-请求，以及三种“疑似/需要核实”的异常事件。中台从凭证推导老人和设备身份，并强制
-`FAMILY_REQUEST=GENERAL`、其余四类 `=EMERGENCY`，不信任客户端或模型给出的 severity；
+老人设备使用 device credential 提交结构化事件：老人主动报告身体不适、向家属提出
+请求、三种“疑似/需要核实”的异常事件，以及 GUI Agent 超时或失败后请求家属协助点单的
+`GUI_ORDER_ASSISTANCE_REQUIRED`。中台从凭证推导老人和设备身份，并强制
+`FAMILY_REQUEST=GENERAL`，其余身体异常和 GUI 点单协助事件 `=EMERGENCY`，不信任客户端或模型给出的 severity；
 事件先写入 SQLite，再向具备查看权限的在线家属发送不含摘要的
 `SAFETY_EVENT_AVAILABLE`。家属 GET 按中台保存的老人 IANA 时区计算当地今日，事件按
-`occurred_at DESC, server_sequence DESC` 返回；ACK 只保存首位确认家属和首次确认时间。
+`occurred_at DESC, server_sequence DESC` 返回；`scope=today` 返回老人当地今日尚未处理的事件，
+`scope=active_emergencies` 返回所有尚未处理的紧急事件且不受日期限制。ACK 只表示家属已读，
+resolve 才表示已经处理并从活动列表移除。
 每个六小时检测窗口最多创建一条异常事件。事件 JSON 不接收图片；老人设备可在事件创建后通过
 独立二进制 PUT 上传一张触发图像，家属经绑定鉴权读取缩略图或原图。上传接口只接受
 JPEG/PNG 原始字节，限制 8 MiB，并验证实际文件签名和事件归属；服务端以不可猜测名称写入

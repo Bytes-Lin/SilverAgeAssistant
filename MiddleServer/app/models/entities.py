@@ -311,6 +311,10 @@ class SafetyEvent(Base):
     acknowledged_by_family_account_id: Mapped[str | None] = mapped_column(
         ForeignKey("family_accounts.id")
     )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_family_account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("family_accounts.id")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
@@ -337,6 +341,24 @@ class SafetyEventAcknowledgementRequest(Base):
             "family_account_id",
             "client_request_id",
             name="uq_safety_event_ack_family_client",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    family_account_id: Mapped[str] = mapped_column(ForeignKey("family_accounts.id"), index=True)
+    elder_id: Mapped[str] = mapped_column(ForeignKey("elder_profiles.id"), index=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("safety_events.event_id"), index=True)
+    client_request_id: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class SafetyEventResolutionRequest(Base):
+    __tablename__ = "safety_event_resolution_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "family_account_id",
+            "client_request_id",
+            name="uq_safety_event_resolution_family_client",
         ),
     )
 

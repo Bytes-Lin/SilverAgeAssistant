@@ -1,6 +1,6 @@
 # 老人状态检测配置与异常事件中台需求
 
-> 实现状态（2026-07-22）：中台已完成 `enabled` 启停配置、结构化安全事件、首次 ACK，以及异常事件 JPEG/PNG 原始字节上传、绑定鉴权读取、文件签名与 8 MiB 校验、去 EXIF 原尺寸副本和 512px 缩略图、私有存储、7 天限期清理与 `SAFETY_EVENT_IMAGE_AVAILABLE` 在线提示。Android 可按本契约继续联调。
+> 实现状态（2026-07-29）：中台已完成 `enabled` 启停配置、结构化安全事件、首次 ACK、GUI Agent 兜底事件类型、今日/活动紧急事件查询、幂等事件处理，以及异常事件 JPEG/PNG 原始字节上传、绑定鉴权读取、文件签名与 8 MiB 校验、去 EXIF 原尺寸副本和 512px 缩略图、私有存储、7 天限期清理与在线提示。
 
 ## 1. 目标与范围
 
@@ -10,7 +10,8 @@
 2. 老人设备产生疑似跌倒、疑似晕倒/失去意识等结构化异常事件；
 3. 中台先持久化事件，再向有权限的家属端发送在线提示；
 4. 家属端通过 REST 补拉事件，一般事件进入“今日状态”，紧急事件进入“紧急事件”并弹窗；
-5. 家属确认收到紧急事件后，中台保存 ACK。
+5. 家属确认收到紧急事件后，中台保存 ACK；
+6. 家属可把已处理的“今日状态”或“紧急事件”标记完成，使其退出活动列表。
 
 中台不代理 MLLM 请求，也不保存模型 API Key、完整模型提示词、推理过程或原始模型响应。状态监控 Agent 达到上报阈值后，可以为该紧急事件上传一张证据图像；图像使用独立二进制接口并受绑定权限保护，不进入普通事件 JSON、WebSocket 或日志。
 
@@ -22,9 +23,13 @@
 - 配置以老人档案为单位，不以家属账号或设备为单位；同一老人更换设备后继续使用原配置。
 - 所有传输时间均为 UTC ISO 8601；“今日”按中台保存的老人 IANA 时区计算，不允许家属查询参数覆盖老人时区。
 - 严重程度仅允许 `GENERAL`（一般）和 `EMERGENCY`（紧急）。
-- 事件类型首版允许 `HEALTH_DISCOMFORT_REPORTED`、`FAMILY_REQUEST`、`FALL_SUSPECTED`、`UNCONSCIOUSNESS_SUSPECTED`、`OTHER_ABNORMALITY`。
-- 端侧确定性策略强制 `FAMILY_REQUEST -> GENERAL`，其余四种异常/身体事件强制为 `EMERGENCY`，不盲信模型生成的 severity。
+- 事件类型允许 `HEALTH_DISCOMFORT_REPORTED`、`FAMILY_REQUEST`、`FALL_SUSPECTED`、`UNCONSCIOUSNESS_SUSPECTED`、`OTHER_ABNORMALITY`、`GUI_ORDER_ASSISTANCE_REQUIRED`。
+- `GUI_ORDER_ASSISTANCE_REQUIRED` 表示 GUI Agent 在确定的时间限制内无法完成外卖或网购任务，需要家属接手；它复用现有设备事件创建接口，不新增另一套通知创建接口。
+- 端侧和服务端确定性策略强制 `FAMILY_REQUEST -> GENERAL`，其余身体异常事件和 `GUI_ORDER_ASSISTANCE_REQUIRED -> EMERGENCY`，不盲信模型生成的 severity。
+- GUI 点单协助事件的 `client_event_id` 使用 GUI 任务 UUID，同一任务只允许创建一次；`event_summary` 只包含家属完成点单所需的最小摘要、当前进度和失败原因，不得包含账号、密码、验证码、支付凭据、完整聊天原文或模型推理。
 - Android 和中台文案必须使用“疑似”“需要核实”，不能把 MLLM 结果宣称为医疗诊断或确定事实。
+- ACK 仅表示“家属已读”，不能代替“已完成”；resolve 表示事件已经处理。首版不做物理删除，避免多个家属看到不一致状态并保留必要审计。
+- “今日状态”按老人本地自然日自动刷新，不需要定时删除数据库记录；跨日未处理紧急事件必须继续出现在活动紧急事件查询中，直至家属 resolve。
 - WebSocket 仅发送“有新数据”的提示，REST/SQLite 才是事实来源。
 
 ## 3. 数据模型
@@ -53,11 +58,13 @@
 | source_device_id | UUID | 由凭证推导 |
 | server_sequence | bigint | 老人事件流递增序号 |
 | occurred_at | UTC datetime | 端侧实际检测时间 |
-| event_type | enum | 五种首版类型 |
+| event_type | enum | 六种允许类型，包含 GUI 点单协助 |
 | event_summary | string | 1..200 字符的家属可读摘要 |
 | severity | enum | `GENERAL/EMERGENCY` |
 | acknowledged_at | UTC datetime/null | 首位家属确认时间 |
 | acknowledged_by_family_account_id | UUID/null | 确认家属 |
+| resolved_at | UTC datetime/null | 首次标记已处理时间 |
+| resolved_by_family_account_id | UUID/null | 首位处理家属 |
 | created_at | UTC datetime | 中台入库时间 |
 | image_available | bool/派生字段 | 是否已有证据图像 |
 | image_content_type | string/null | `image/jpeg` 或 `image/png` |
@@ -132,17 +139,41 @@ Header：`Idempotency-Key: <client_request_id>`
   "event_summary": "检测到老人疑似跌倒，请尽快联系核实。",
   "severity": "EMERGENCY",
   "acknowledged_at": null,
+  "resolved_at": null,
   "created_at": "2026-07-22T03:10:02Z"
 }
 ```
 
 服务端必须先提交 SQLite 事务，再尝试 WebSocket 投递。相同 `client_event_id` 幂等重试不得创建重复事件。服务端应限制未来时间容差、过旧事件、摘要长度、枚举值和设备归属。
 
-### 4.5 家属读取今日事件
+GUI Agent 兜底时仍调用本接口，例如：
 
-`GET /api/v1/elders/{elder_id}/safety-events?scope=today`
+```json
+{
+  "client_event_id": "GUI任务UUID",
+  "occurred_at": "2026-07-29T04:30:00Z",
+  "event_type": "GUI_ORDER_ASSISTANCE_REQUIRED",
+  "event_summary": "老人想点一份清淡午餐；已选餐厅但未进入支付，页面操作超时，请家属协助。",
+  "severity": "EMERGENCY"
+}
+```
 
-认证和绑定验证同 4.1。`scope=today` 按老人最近可靠 IANA 时区计算；无位置时区时使用中台明确的系统后备值，并返回实际时区。
+服务端必须把该类型校验为 `EMERGENCY`。同一 GUI 任务重试必须返回第一次创建的事件，不得重复通知家属。
+
+### 4.5 家属读取活动事件
+
+```text
+GET /api/v1/elders/{elder_id}/safety-events?scope=today
+GET /api/v1/elders/{elder_id}/safety-events?scope=active_emergencies
+```
+
+认证和绑定验证同 4.1。
+
+- `scope=today`：按老人最近可靠 IANA 时区计算老人当地自然日，返回当天 `resolved_at IS NULL` 的一般和紧急事件，用于“今日状态”自动按天刷新；
+- `scope=active_emergencies`：返回全部 `severity=EMERGENCY AND resolved_at IS NULL` 的事件，不限制发生日期，用于“紧急事件”跨日保留；
+- 无位置时区时使用中台明确的系统后备值，并返回实际时区；不得由查询参数传入固定时区覆盖；
+- 两种 scope 均按 `occurred_at DESC, server_sequence DESC` 排序，最新事件在上；
+- 未识别的 scope 返回 `400 INVALID_SAFETY_EVENT_SCOPE`。
 
 ```json
 {
@@ -157,6 +188,7 @@ Header：`Idempotency-Key: <client_request_id>`
       "event_summary": "检测到老人疑似跌倒，请尽快联系核实。",
       "severity": "EMERGENCY",
       "acknowledged_at": null,
+      "resolved_at": null,
       "created_at": "2026-07-22T03:10:02Z"
     }
   ],
@@ -164,7 +196,7 @@ Header：`Idempotency-Key: <client_request_id>`
 }
 ```
 
-事件按 `occurred_at DESC, server_sequence DESC` 返回。无事件返回空数组，不返回 404。
+无事件返回空数组，不返回 404。服务端应设置合理分页或首版最多返回最近 100 条活动紧急事件，不能因历史数据无限增长而返回无界响应。
 
 ### 4.6 家属确认紧急事件
 
@@ -180,7 +212,45 @@ Header：`Idempotency-Key: <client_request_id>`
 
 响应为确认后的完整事件。重复确认返回第一次确认结果，不更改首位确认家属和时间。一般事件也可确认，但首版 Android 只对紧急弹窗调用。
 
-### 4.7 老人设备上传事件图像
+### 4.7 家属标记事件已处理
+
+`POST /api/v1/elders/{elder_id}/safety-events/{event_id}/resolve`
+
+认证：family access token；必须验证当前家属与事件所属老人存在有效绑定。Header：`Idempotency-Key: <client_request_id>`。
+
+```json
+{
+  "client_request_id": "UUID"
+}
+```
+
+成功返回 `200` 和处理后的完整事件：
+
+```json
+{
+  "event_id": "UUID",
+  "server_sequence": 1024,
+  "occurred_at": "2026-07-29T04:30:00Z",
+  "event_type": "GUI_ORDER_ASSISTANCE_REQUIRED",
+  "event_summary": "老人想点一份清淡午餐；已选餐厅但未进入支付，页面操作超时，请家属协助。",
+  "severity": "EMERGENCY",
+  "acknowledged_at": "2026-07-29T04:31:00Z",
+  "resolved_at": "2026-07-29T04:40:00Z",
+  "created_at": "2026-07-29T04:30:02Z"
+}
+```
+
+规则：
+
+- resolve 适用于一般和紧急事件；家属端“已完成/删除”按钮统一调用本接口；
+- 首次成功调用原子写入 `resolved_at` 和 `resolved_by_family_account_id`；
+- 已处理事件再次调用时返回第一次处理结果，不改变首位处理家属和时间；
+- resolve 不物理删除事件、图片或审计记录，也不自动伪造 `acknowledged_at`；
+- 处理完成后，该事件不再出现在 `scope=today` 和 `scope=active_emergencies` 的默认活动结果中；
+- 相同 `Idempotency-Key` 与相同请求返回首次结果；相同键用于不同请求时返回 `409 IDEMPOTENCY_CONFLICT`。
+- 事务提交后复用现有 `SAFETY_EVENT_AVAILABLE` WebSocket 提示通知其他在线家属刷新 REST 数据；提示仍不得携带事件摘要。首版不要求新增另一种 WebSocket 消息。
+
+### 4.8 老人设备上传事件图像
 
 `PUT /api/v1/devices/me/safety-events/{event_id}/image`
 
@@ -188,7 +258,7 @@ Header：`Idempotency-Key: <client_request_id>`
 
 服务端必须验证事件属于当前设备所绑定的老人，且事件类型为监控异常类型。单图最大 8 MiB；验证实际文件签名，不能只信任 Content-Type。相同事件和相同内容幂等返回首次结果，不同内容返回 `409 IDEMPOTENCY_CONFLICT`。保存原图后生成不超过 512px、去除 EXIF 的缩略图，再把事件 `image_available` 置为 true。图像失败不能删除已入库的紧急事件。
 
-### 4.8 家属读取事件图像
+### 4.9 家属读取事件图像
 
 ```text
 GET /api/v1/elders/{elder_id}/safety-events/{event_id}/image?variant=thumbnail
@@ -224,7 +294,7 @@ GET /api/v1/elders/{elder_id}/safety-events/{event_id}/image?variant=original
 
 仅投递给与该老人存在有效绑定且有安全事件查看权限的在线家属。Android 收到后调用 4.5；WebSocket 不携带摘要，避免把内容当成可靠事实或在日志中扩大敏感信息。
 
-图像保存成功后再发送 `SAFETY_EVENT_IMAGE_AVAILABLE`，只携带 `elder_id` 和 `event_id`。Android 收到后重新调用 4.5，并通过 4.8 按需加载缩略图；WebSocket 不携带图片、URL 或摘要。
+图像保存成功后再发送 `SAFETY_EVENT_IMAGE_AVAILABLE`，只携带 `elder_id` 和 `event_id`。Android 收到后重新调用 4.5，并通过 4.9 按需加载缩略图；WebSocket 不携带图片、URL 或摘要。
 
 ## 6. 错误码
 
@@ -233,6 +303,7 @@ GET /api/v1/elders/{elder_id}/safety-events/{event_id}/image?variant=original
 - `INVALID_SAFETY_ENABLED`：`enabled` 缺失或不是布尔值；
 - `SAFETY_CONFIG_REVISION_CONFLICT`：乐观锁冲突；
 - `INVALID_SAFETY_EVENT`：事件字段、时间或枚举无效；
+- `INVALID_SAFETY_EVENT_SCOPE`：事件查询 scope 不受支持；
 - `SAFETY_EVENT_NOT_FOUND`：事件不存在；
 - `INVALID_SAFETY_EVENT_IMAGE`：类型、文件签名或事件类型不允许；
 - `SAFETY_EVENT_IMAGE_TOO_LARGE`：超过 8 MiB；
@@ -244,7 +315,7 @@ GET /api/v1/elders/{elder_id}/safety-events/{event_id}/image?variant=original
 
 ## 7. 可靠性、安全和审计
 
-- 配置更新、事件创建、ACK 均须事务写库并支持幂等。
+- 配置更新、事件创建、ACK、resolve 均须事务写库并支持幂等。
 - 事件投递失败不能回滚已入库事件；家属 App 启动、恢复前台和进入事件页面时通过 REST 补拉。
 - 中台日志仅记录 event ID、枚举、状态码和脱敏主体 ID，不记录事件摘要、图像或模型正文。
 - 原图与缩略图必须加密存储或放在仅服务进程可读的私有目录，禁止由静态文件服务器直接公开；默认保留 7 天后删除二进制并令 `image_available=false`。
@@ -265,3 +336,22 @@ GET /api/v1/elders/{elder_id}/safety-events/{event_id}/image?variant=original
 - 状态监控 Agent 每个六小时窗口最多创建一条异常事件；创建成功后上传触发上报的图像。家属紧急事件页按需加载缩略图，点击后请求原图。
 
 中台现在会始终返回 `enabled`，Android 保留旧响应按 `true` 处理仅用于兼容升级前服务，不能作为新接口的正常行为。
+
+## 9. 本轮中台实现清单（已完成）
+
+必须完成：
+
+1. 扩展现有 `POST /api/v1/devices/me/safety-events`，接受 `GUI_ORDER_ASSISTANCE_REQUIRED` 并在服务端强制映射为 `EMERGENCY`；
+2. 为 `safety_events` 增加可空的 `resolved_at`、`resolved_by_family_account_id` 字段，并在所有完整事件响应中返回 `resolved_at`；
+3. 扩展现有 `GET /api/v1/elders/{elder_id}/safety-events`，支持 `scope=active_emergencies`，并让两个活动 scope 排除已处理事件；
+4. 新增 `POST /api/v1/elders/{elder_id}/safety-events/{event_id}/resolve`；
+5. 更新 OpenAPI、数据库迁移、Repository/Service、鉴权、幂等记录和自动化测试。
+
+本轮不需要新增：
+
+- GUI Agent 专用的事件创建接口；
+- 事件硬删除接口；
+- 单独的 dismiss/隐藏接口；
+- 新的 WebSocket 消息类型。
+
+最低验收测试应覆盖：GUI 事件 severity 强制映射、同任务创建幂等、无绑定家属禁止处理、首次 resolve 原子写入、重复 resolve 不改变首位处理人和时间、今日列表排除已处理事件、跨日未处理紧急事件仍可查询、跨日已处理紧急事件不可查询、无效 scope、相同幂等键不同请求冲突。

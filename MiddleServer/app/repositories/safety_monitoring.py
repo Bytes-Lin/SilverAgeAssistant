@@ -12,6 +12,7 @@ from app.models import (
     SafetyEvent,
     SafetyEventAcknowledgementRequest,
     SafetyEventImage,
+    SafetyEventResolutionRequest,
     SafetyMonitoringConfiguration,
     SafetyMonitoringConfigurationRequest,
 )
@@ -192,18 +193,30 @@ class SafetyMonitoringRepository:
         }
 
     async def list_events(
-        self, elder_id: str, started_at: datetime, ended_at: datetime
+        self,
+        elder_id: str,
+        *,
+        started_at: datetime | None = None,
+        ended_at: datetime | None = None,
+        emergency_only: bool = False,
+        limit: int = 100,
     ) -> list[tuple[SafetyEvent, SafetyEventImage | None]]:
         query = (
             select(SafetyEvent, SafetyEventImage)
             .outerjoin(SafetyEventImage, SafetyEventImage.event_id == SafetyEvent.event_id)
             .where(
                 SafetyEvent.elder_id == elder_id,
-                SafetyEvent.occurred_at >= started_at,
-                SafetyEvent.occurred_at < ended_at,
+                SafetyEvent.resolved_at.is_(None),
             )
             .order_by(SafetyEvent.occurred_at.desc(), SafetyEvent.server_sequence.desc())
+            .limit(limit)
         )
+        if started_at is not None:
+            query = query.where(SafetyEvent.occurred_at >= started_at)
+        if ended_at is not None:
+            query = query.where(SafetyEvent.occurred_at < ended_at)
+        if emergency_only:
+            query = query.where(SafetyEvent.severity == "EMERGENCY")
         return list((await self.session.execute(query)).tuples().all())
 
     async def create_event_image(
@@ -286,6 +299,34 @@ class SafetyMonitoringRepository:
     ) -> None:
         self.session.add(
             SafetyEventAcknowledgementRequest(
+                family_account_id=family_id,
+                elder_id=elder_id,
+                event_id=event_id,
+                client_request_id=client_request_id,
+                created_at=created_at,
+            )
+        )
+
+    async def get_resolution_request(
+        self, family_id: str, client_request_id: str
+    ) -> SafetyEventResolutionRequest | None:
+        query = select(SafetyEventResolutionRequest).where(
+            SafetyEventResolutionRequest.family_account_id == family_id,
+            SafetyEventResolutionRequest.client_request_id == client_request_id,
+        )
+        return (await self.session.scalars(query)).one_or_none()
+
+    def add_resolution_request(
+        self,
+        *,
+        family_id: str,
+        elder_id: str,
+        event_id: str,
+        client_request_id: str,
+        created_at: datetime,
+    ) -> None:
+        self.session.add(
+            SafetyEventResolutionRequest(
                 family_account_id=family_id,
                 elder_id=elder_id,
                 event_id=event_id,

@@ -37,6 +37,7 @@ async def test_openapi_contains_binding_contract(api: ApiFixture) -> None:
         "/api/v1/elders/{elder_id}/safety-events",
         "/api/v1/elders/{elder_id}/safety-events/{event_id}/image",
         "/api/v1/elders/{elder_id}/safety-events/{event_id}/acknowledge",
+        "/api/v1/elders/{elder_id}/safety-events/{event_id}/resolve",
     }
     assert expected.issubset(paths)
     assert "/api/v1/auth/family/dev-verification-token" not in paths
@@ -173,6 +174,7 @@ async def test_openapi_contains_binding_contract(api: ApiFixture) -> None:
         "FALL_SUSPECTED",
         "UNCONSCIOUSNESS_SUSPECTED",
         "OTHER_ABNORMALITY",
+        "GUI_ORDER_ASSISTANCE_REQUIRED",
     }
     assert not {
         "elder_id",
@@ -187,9 +189,15 @@ async def test_openapi_contains_binding_contract(api: ApiFixture) -> None:
     scope = next(
         parameter for parameter in safety_today["parameters"] if parameter["name"] == "scope"
     )
-    assert scope["schema"]["const"] == "today"
+    assert scope["schema"]["default"] == "today"
+    assert set(scope["schema"]["enum"]) == {"today", "active_emergencies"}
+    resolve = paths["/api/v1/elders/{elder_id}/safety-events/{event_id}/resolve"]["post"]
+    assert resolve["security"] == [{"HTTPBearer": []}]
+    assert {"400", "401", "403", "404", "409"}.issubset(resolve["responses"])
     safety_response = document["components"]["schemas"]["SafetyEventResponse"]
     assert "acknowledged_by_family_account_id" not in safety_response["properties"]
+    assert "resolved_by_family_account_id" not in safety_response["properties"]
+    assert "resolved_at" in safety_response["required"]
     assert {
         "image_available",
         "image_content_type",

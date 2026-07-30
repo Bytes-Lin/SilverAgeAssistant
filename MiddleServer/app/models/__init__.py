@@ -17,6 +17,7 @@ from app.models.entities import (
     SafetyEvent,
     SafetyEventAcknowledgementRequest,
     SafetyEventImage,
+    SafetyEventResolutionRequest,
     SafetyMonitoringConfiguration,
     SafetyMonitoringConfigurationRequest,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "SafetyEvent",
     "SafetyEventAcknowledgementRequest",
     "SafetyEventImage",
+    "SafetyEventResolutionRequest",
     "SafetyMonitoringConfiguration",
     "SafetyMonitoringConfigurationRequest",
 ]

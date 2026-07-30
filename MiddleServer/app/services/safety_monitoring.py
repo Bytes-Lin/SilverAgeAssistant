@@ -24,9 +24,10 @@ from app.repositories.safety_monitoring import SafetyMonitoringRepository
 from app.schemas.safety_monitoring import (
     SafetyEventAcknowledgementRequest,
     SafetyEventCreateRequest,
+    SafetyEventResolutionRequest,
     SafetyEventResponse,
     SafetyEventSeverity,
-    SafetyEventsTodayResponse,
+    SafetyEventsResponse,
     SafetyEventType,
     SafetyMonitoringConfigurationResponse,
     SafetyMonitoringConfigurationUpdateRequest,
@@ -268,19 +269,28 @@ class SafetyMonitoringService:
                 pass
         return response
 
-    async def get_today_events(
-        self, family: FamilyAccount, elder_id: str
-    ) -> SafetyEventsTodayResponse:
+    async def get_events(
+        self, family: FamilyAccount, elder_id: str, scope: str
+    ) -> SafetyEventsResponse:
+        if scope not in {"today", "active_emergencies"}:
+            raise ApiError(400, "INVALID_SAFETY_EVENT_SCOPE", "不支持该安全事件查询范围")
         async with self.session.begin():
             await self._require_family_binding(family.id, elder_id, for_event=True)
             time_zone = await self._resolve_time_zone(elder_id)
             zone = ZoneInfo(time_zone)
             synced_at = utc_now()
             current_date = synced_at.astimezone(zone).date()
-            started_at = datetime.combine(current_date, time.min, tzinfo=zone).astimezone(UTC)
-            ended_at = started_at + timedelta(days=1)
-            events = await self.repository.list_events(elder_id, started_at, ended_at)
-            return SafetyEventsTodayResponse(
+            if scope == "today":
+                started_at = datetime.combine(current_date, time.min, tzinfo=zone).astimezone(UTC)
+                ended_at = started_at + timedelta(days=1)
+                events = await self.repository.list_events(
+                    elder_id,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                )
+            else:
+                events = await self.repository.list_events(elder_id, emergency_only=True)
+            return SafetyEventsResponse(
                 current_date=current_date,
                 timezone=time_zone,
                 events=[self._event_response(event, image) for event, image in events],
@@ -340,6 +350,77 @@ class SafetyMonitoringService:
                 await self.session.flush()
                 image = await self.repository.get_event_image(event.event_id)
                 return self._event_response(event, image)
+
+    async def resolve_event(
+        self,
+        family: FamilyAccount,
+        elder_id: str,
+        event_id: str,
+        request: SafetyEventResolutionRequest,
+        idempotency_key: str | None,
+    ) -> SafetyEventResponse:
+        self._validate_idempotency_key(idempotency_key, request.client_request_id)
+        request_id = str(request.client_request_id)
+        family_ids: set[str] = set()
+        resolved_now = False
+        async with self.lock:
+            async with self.session.begin():
+                await self._require_family_binding(family.id, elder_id, for_event=True)
+                previous = await self.repository.get_resolution_request(family.id, request_id)
+                if previous is not None:
+                    if previous.elder_id != elder_id or previous.event_id != event_id:
+                        raise ApiError(
+                            409,
+                            "IDEMPOTENCY_CONFLICT",
+                            "同一请求标识对应了不同事件",
+                        )
+                    previous_event = await self.repository.get_event(previous.event_id)
+                    if previous_event is None:
+                        raise ApiError(404, "SAFETY_EVENT_NOT_FOUND", "安全事件不存在")
+                    image = await self.repository.get_event_image(previous.event_id)
+                    return self._event_response(previous_event, image)
+
+                event = await self.repository.get_event(event_id)
+                if event is None or event.elder_id != elder_id:
+                    raise ApiError(404, "SAFETY_EVENT_NOT_FOUND", "安全事件不存在")
+                now = utc_now()
+                if event.resolved_at is None:
+                    event.resolved_at = now
+                    event.resolved_by_family_account_id = family.id
+                    resolved_now = True
+                    family_ids = await self.repository.list_authorized_family_ids(elder_id)
+                    self.repository.add_audit(
+                        action="SAFETY_EVENT_RESOLVED",
+                        actor_type="FAMILY",
+                        actor_id=family.id,
+                        resource_type="SAFETY_EVENT",
+                        resource_id=event.event_id,
+                        elder_id=elder_id,
+                        details={"severity": event.severity},
+                    )
+                self.repository.add_resolution_request(
+                    family_id=family.id,
+                    elder_id=elder_id,
+                    event_id=event_id,
+                    client_request_id=request_id,
+                    created_at=now,
+                )
+                await self.session.flush()
+                image = await self.repository.get_event_image(event.event_id)
+                response = self._event_response(event, image)
+
+        if resolved_now:
+            try:
+                await self.notifier.notify_safety_event_available(
+                    family_ids,
+                    elder_id,
+                    event_id,
+                    response.server_sequence,
+                    response.severity.value,
+                )
+            except Exception:
+                pass
+        return response
 
     async def upload_event_image(
         self,
@@ -640,6 +721,7 @@ class SafetyMonitoringService:
             acknowledged_at=(
                 ensure_utc(event.acknowledged_at) if event.acknowledged_at is not None else None
             ),
+            resolved_at=ensure_utc(event.resolved_at) if event.resolved_at is not None else None,
             created_at=ensure_utc(event.created_at),
             image_available=image_available,
             image_content_type=image.content_type if image_available and image else None,
