@@ -44,6 +44,7 @@
 * [`development-workflow.md`](06-development/development-workflow.md)：Git、分支、PR 和开发顺序。
 * [`codex-usage.md`](06-development/codex-usage.md)：Codex 配置和使用方式。
 * [`local-llama-server.md`](06-development/local-llama-server.md)：本地 OpenAI 兼容模型模拟。
+* [`android-review-handoff-2026-07-30.md`](06-development/android-review-handoff-2026-07-30.md)：当前 Android 实现与文档对照、粗审发现和下一次 Agent/GUI Agent 开发会话起点。
 * [`milestones/`](06-development/milestones/)：可执行开发里程碑。
 
 ## 07 测试
