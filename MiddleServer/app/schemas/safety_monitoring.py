@@ -54,7 +54,7 @@ class SafetyEventCreateRequest(StrictSchema):
         return normalized
 
     @model_validator(mode="after")
-    def validate_unverified_abnormality_wording(self) -> Self:
+    def normalize_unverified_abnormality_wording(self) -> Self:
         unverified_types = {
             SafetyEventType.FALL_SUSPECTED,
             SafetyEventType.UNCONSCIOUSNESS_SUSPECTED,
@@ -65,7 +65,9 @@ class SafetyEventCreateRequest(StrictSchema):
             and "疑似" not in self.event_summary
             and "需要核实" not in self.event_summary
         ):
-            raise ValueError("event summary must describe an unverified event")
+            prefix = "需要核实："
+            maximum_detail_length = 200 - len(prefix)
+            self.event_summary = prefix + self.event_summary[:maximum_detail_length].rstrip()
         return self
 
 

@@ -41,6 +41,19 @@ class ModelConfigurationRepository:
         )
         return (await self.session.scalars(query)).one_or_none()
 
+    async def list_active_device_ids(self, elder_id: str) -> set[str]:
+        query = (
+            select(DeviceCredential.id)
+            .join(Binding, Binding.id == DeviceCredential.binding_id)
+            .where(
+                DeviceCredential.elder_id == elder_id,
+                DeviceCredential.revoked_at.is_(None),
+                Binding.elder_id == elder_id,
+                Binding.revoked_at.is_(None),
+            )
+        )
+        return set((await self.session.scalars(query)).all())
+
     async def get_configuration(self, elder_id: str) -> ElderModelConfiguration | None:
         query = select(ElderModelConfiguration).where(ElderModelConfiguration.elder_id == elder_id)
         return (await self.session.scalars(query)).one_or_none()
@@ -69,6 +82,16 @@ class ModelConfigurationRepository:
         top_p: float,
         top_k: int,
         reasoning_enabled: bool,
+        voice_websocket_url: str | None,
+        voice_asr_model: str | None,
+        voice_tts_model: str | None,
+        voice_tts_voice: str | None,
+        voice_tts_response_format: str | None,
+        voice_tts_sample_rate: int | None,
+        voice_tts_volume: int | None,
+        voice_tts_rate: float | None,
+        voice_tts_pitch: float | None,
+        voice_language: str | None,
         family_id: str,
         client_request_id: str,
         now: datetime,
@@ -86,6 +109,18 @@ class ModelConfigurationRepository:
             top_p=Decimal(str(top_p)),
             top_k=top_k,
             reasoning_enabled=reasoning_enabled,
+            voice_websocket_url=voice_websocket_url,
+            voice_asr_model=voice_asr_model,
+            voice_tts_model=voice_tts_model,
+            voice_tts_voice=voice_tts_voice,
+            voice_tts_response_format=voice_tts_response_format,
+            voice_tts_sample_rate=voice_tts_sample_rate,
+            voice_tts_volume=voice_tts_volume,
+            voice_tts_rate=Decimal(str(voice_tts_rate)) if voice_tts_rate is not None else None,
+            voice_tts_pitch=(
+                Decimal(str(voice_tts_pitch)) if voice_tts_pitch is not None else None
+            ),
+            voice_language=voice_language,
             updated_by_family_id=family_id,
             created_at=now,
             updated_at=now,
@@ -110,6 +145,16 @@ class ModelConfigurationRepository:
         top_p: float,
         top_k: int,
         reasoning_enabled: bool,
+        voice_websocket_url: str | None,
+        voice_asr_model: str | None,
+        voice_tts_model: str | None,
+        voice_tts_voice: str | None,
+        voice_tts_response_format: str | None,
+        voice_tts_sample_rate: int | None,
+        voice_tts_volume: int | None,
+        voice_tts_rate: float | None,
+        voice_tts_pitch: float | None,
+        voice_language: str | None,
         family_id: str,
         client_request_id: str,
         now: datetime,
@@ -125,6 +170,20 @@ class ModelConfigurationRepository:
         configuration.top_p = Decimal(str(top_p))
         configuration.top_k = top_k
         configuration.reasoning_enabled = reasoning_enabled
+        configuration.voice_websocket_url = voice_websocket_url
+        configuration.voice_asr_model = voice_asr_model
+        configuration.voice_tts_model = voice_tts_model
+        configuration.voice_tts_voice = voice_tts_voice
+        configuration.voice_tts_response_format = voice_tts_response_format
+        configuration.voice_tts_sample_rate = voice_tts_sample_rate
+        configuration.voice_tts_volume = voice_tts_volume
+        configuration.voice_tts_rate = (
+            Decimal(str(voice_tts_rate)) if voice_tts_rate is not None else None
+        )
+        configuration.voice_tts_pitch = (
+            Decimal(str(voice_tts_pitch)) if voice_tts_pitch is not None else None
+        )
+        configuration.voice_language = voice_language
         configuration.updated_by_family_id = family_id
         configuration.updated_at = now
         configuration.last_client_request_id = client_request_id

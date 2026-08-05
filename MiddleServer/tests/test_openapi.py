@@ -80,6 +80,58 @@ async def test_openapi_contains_binding_contract(api: ApiFixture) -> None:
     assert sampling_schema["properties"]["top_p"]["maximum"] == 1
     assert sampling_schema["properties"]["top_k"]["minimum"] == 0
     assert sampling_schema["properties"]["top_k"]["maximum"] == 1000
+    voice_reference = next(
+        option["$ref"]
+        for option in model_config_request["properties"]["voice"]["anyOf"]
+        if "$ref" in option
+    )
+    assert voice_reference.endswith("/VoiceModelConfiguration")
+    voice_schema = document["components"]["schemas"]["VoiceModelConfiguration"]
+    assert set(voice_schema["required"]) == {
+        "websocket_url",
+        "asr_model",
+        "tts_model",
+        "tts_voice",
+        "tts_response_format",
+        "tts_sample_rate",
+        "tts_volume",
+        "tts_rate",
+        "tts_pitch",
+        "language",
+    }
+    assert voice_schema["properties"]["websocket_url"]["maxLength"] == 500
+    assert voice_schema["properties"]["asr_model"]["maxLength"] == 120
+    assert voice_schema["properties"]["tts_model"]["maxLength"] == 120
+    assert voice_schema["properties"]["tts_voice"]["maxLength"] == 120
+    assert set(document["components"]["schemas"]["VoiceAudioFormat"]["enum"]) == {
+        "pcm",
+        "wav",
+        "mp3",
+        "opus",
+    }
+    assert set(voice_schema["properties"]["tts_sample_rate"]["enum"]) == {
+        8000,
+        16000,
+        22050,
+        24000,
+        44100,
+        48000,
+    }
+    assert voice_schema["properties"]["tts_volume"]["minimum"] == 0
+    assert voice_schema["properties"]["tts_volume"]["maximum"] == 100
+    assert voice_schema["properties"]["tts_rate"]["minimum"] == 0.5
+    assert voice_schema["properties"]["tts_rate"]["maximum"] == 2.0
+    assert voice_schema["properties"]["tts_pitch"]["minimum"] == 0.5
+    assert voice_schema["properties"]["tts_pitch"]["maximum"] == 2.0
+    assert voice_schema["properties"]["language"]["const"] == "zh"
+    assert not {
+        "api_key",
+        "encrypted_api_key",
+        "authorization",
+        "credential",
+        "cookie",
+        "headers",
+    } & set(voice_schema["properties"])
     usage_upload = paths["/api/v1/model-usage/batches"]["post"]
     assert usage_upload["security"] == [{"HTTPBearer": []}]
     assert {"400", "401", "409", "413"}.issubset(usage_upload["responses"])

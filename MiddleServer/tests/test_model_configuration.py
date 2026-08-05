@@ -2,6 +2,8 @@ import asyncio
 import copy
 import json
 from typing import Any
+from unittest.mock import AsyncMock
+from uuid import UUID
 
 from fastapi import FastAPI
 from httpx import AsyncClient, Response
@@ -15,6 +17,7 @@ from app.models import (
     ElderModelConfiguration,
     ModelConfigurationRequest,
 )
+from app.websocket.manager import ConnectionManager
 from tests.conftest import bind_payload, create_code, create_elder, register_family
 
 ApiFixture = tuple[AsyncClient, FastAPI, Settings]
@@ -40,6 +43,21 @@ def model_configuration_payload(
         "reasoning_enabled": False,
         "expected_revision": expected_revision,
         "client_request_id": request_id,
+    }
+
+
+def voice_configuration_payload() -> dict[str, Any]:
+    return {
+        "websocket_url": ("wss://workspace-id.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"),
+        "asr_model": "qwen-audio-3.0-asr-flash-streaming",
+        "tts_model": "qwen-audio-3.0-tts-flash",
+        "tts_voice": "longanfengyue",
+        "tts_response_format": "pcm",
+        "tts_sample_rate": 22050,
+        "tts_volume": 50,
+        "tts_rate": 0.9,
+        "tts_pitch": 1.0,
+        "language": "zh",
     }
 
 
@@ -83,6 +101,7 @@ async def test_family_creates_and_both_sides_read_same_configuration(
     family, elder, bound = await prepared_binding(client)
     family_headers = {"Authorization": f"Bearer {family['access_token']}"}
     device_headers = {"Authorization": f"Bearer {bound['device_credential']}"}
+    app.state.connection_manager.notify_model_config_available = AsyncMock(return_value=True)
 
     missing = await client.get(
         f"/api/v1/elders/{elder['elder_id']}/model-config",
@@ -131,6 +150,12 @@ async def test_family_creates_and_both_sides_read_same_configuration(
     assert family_read.headers["Cache-Control"] == "no-store"
     assert device_read.headers["Cache-Control"] == "no-store"
 
+    notifier = app.state.connection_manager.notify_model_config_available
+    notifier.assert_awaited_once()
+    assert notifier.await_args.args[0] == elder["elder_id"]
+    assert len(notifier.await_args.args[1]) == 1
+    assert notifier.await_args.args[2] == 1
+
     async with app.state.database.session_factory() as session:
         assert await session.scalar(select(func.count(ElderModelConfiguration.id))) == 1
         stored = (await session.scalars(select(ElderModelConfiguration))).one()
@@ -139,11 +164,66 @@ async def test_family_creates_and_both_sides_read_same_configuration(
         assert stored.reasoning_enabled is False
 
 
+async def test_websocket_hint_failure_does_not_rollback_configuration(
+    api: ApiFixture,
+) -> None:
+    client, app, _ = api
+    family, elder, _ = await prepared_binding(client)
+    app.state.connection_manager.notify_model_config_available = AsyncMock(
+        side_effect=RuntimeError("websocket unavailable")
+    )
+
+    created = await put_configuration(
+        client,
+        family["access_token"],
+        elder["elder_id"],
+        model_configuration_payload(),
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["revision"] == 1
+
+    async with app.state.database.session_factory() as session:
+        stored = (await session.scalars(select(ElderModelConfiguration))).one()
+        assert stored.revision == 1
+
+
+async def test_model_config_hint_is_minimal_and_targets_only_active_devices() -> None:
+    manager = ConnectionManager()
+    active = AsyncMock()
+    inactive = AsyncMock()
+    await manager.connect("elder-1", "active-device", active)
+    await manager.connect("elder-1", "inactive-device", inactive)
+
+    delivered = await manager.notify_model_config_available(
+        "elder-1",
+        {"active-device"},
+        3,
+    )
+
+    assert delivered is True
+    active.send_json.assert_awaited_once()
+    inactive.send_json.assert_not_awaited()
+    message = active.send_json.await_args.args[0]
+    assert set(message) == {
+        "protocol_version",
+        "message_type",
+        "message_id",
+        "sent_at",
+        "payload",
+    }
+    assert message["protocol_version"] == 1
+    assert message["message_type"] == "MODEL_CONFIG_AVAILABLE"
+    assert message["payload"] == {"revision": 3}
+    UUID(message["message_id"])
+    assert message["sent_at"].endswith("Z")
+
+
 async def test_idempotency_history_and_revision_conflicts_are_stable(
     api: ApiFixture,
 ) -> None:
     client, app, _ = api
     family, elder, _ = await prepared_binding(client)
+    app.state.connection_manager.notify_model_config_available = AsyncMock(return_value=True)
     first_payload = model_configuration_payload()
     first = await put_configuration(
         client, family["access_token"], elder["elder_id"], first_payload
@@ -202,6 +282,82 @@ async def test_idempotency_history_and_revision_conflicts_are_stable(
             )
             == 2
         )
+    notifier = app.state.connection_manager.notify_model_config_available
+    assert notifier.await_count == 2
+    assert [call.args[2] for call in notifier.await_args_list] == [1, 2]
+
+
+async def test_voice_configuration_is_atomic_versioned_and_available_to_device(
+    api: ApiFixture,
+) -> None:
+    client, app, _ = api
+    family, elder, bound = await prepared_binding(client)
+    payload = model_configuration_payload()
+    payload["voice"] = voice_configuration_payload()
+
+    created = await put_configuration(
+        client,
+        family["access_token"],
+        elder["elder_id"],
+        payload,
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["configuration"]["voice"] == voice_configuration_payload()
+    assert created.json()["revision"] == 1
+
+    family_read = await client.get(
+        f"/api/v1/elders/{elder['elder_id']}/model-config",
+        headers={"Authorization": f"Bearer {family['access_token']}"},
+    )
+    device_read = await client.get(
+        "/api/v1/devices/me/model-config",
+        headers={"Authorization": f"Bearer {bound['device_credential']}"},
+    )
+    assert family_read.json() == device_read.json() == created.json()
+
+    updated_payload = model_configuration_payload(
+        "91000000-0000-4000-8000-000000000010",
+        expected_revision=1,
+    )
+    updated_voice = voice_configuration_payload()
+    updated_voice["tts_volume"] = 60
+    updated_payload["voice"] = updated_voice
+    updated = await put_configuration(
+        client,
+        family["access_token"],
+        elder["elder_id"],
+        updated_payload,
+    )
+    retry = await put_configuration(
+        client,
+        family["access_token"],
+        elder["elder_id"],
+        updated_payload,
+    )
+    assert updated.status_code == retry.status_code == 200
+    assert updated.json() == retry.json()
+    assert updated.json()["revision"] == 2
+    assert updated.json()["configuration"]["voice"]["tts_volume"] == 60
+
+    conflicting_payload = copy.deepcopy(updated_payload)
+    conflicting_payload["voice"]["tts_pitch"] = 1.1
+    conflict = await put_configuration(
+        client,
+        family["access_token"],
+        elder["elder_id"],
+        conflicting_payload,
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
+
+    async with app.state.database.session_factory() as session:
+        stored = (await session.scalars(select(ElderModelConfiguration))).one()
+        assert stored.revision == 2
+        assert stored.voice_websocket_url == updated_voice["websocket_url"]
+        assert stored.voice_tts_volume == 60
+        assert float(stored.voice_tts_rate or 0) == 0.9
+        assert float(stored.voice_tts_pitch or 0) == 1.0
+        assert await session.scalar(select(func.count(ModelConfigurationRequest.id))) == 2
 
 
 async def test_concurrent_updates_use_optimistic_revision(api: ApiFixture) -> None:
@@ -336,6 +492,62 @@ async def test_invalid_and_secret_bearing_payloads_are_rejected_without_storage(
         payload[field] = "must-never-be-stored"
         cases.append(payload)
 
+    def with_voice_change(field: str, value: object) -> dict[str, Any]:
+        payload = model_configuration_payload()
+        voice = voice_configuration_payload()
+        voice[field] = value
+        payload["voice"] = voice
+        return payload
+
+    cases.extend(
+        [
+            {**model_configuration_payload(), "voice": {"websocket_url": "wss://x"}},
+            with_voice_change(
+                "websocket_url",
+                "ws://workspace-id.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+            ),
+            with_voice_change(
+                "websocket_url",
+                "wss://voice.example.com/api-ws/v1/inference",
+            ),
+            with_voice_change(
+                "websocket_url",
+                "wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+            ),
+            with_voice_change(
+                "websocket_url",
+                "wss://user@workspace-id.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+            ),
+            with_voice_change(
+                "websocket_url",
+                "wss://workspace-id.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference?key=x",
+            ),
+            with_voice_change(
+                "websocket_url",
+                "wss://workspace-id.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference#x",
+            ),
+            with_voice_change(
+                "websocket_url",
+                "wss://workspace-id.cn-beijing.maas.aliyuncs.com/wrong",
+            ),
+            with_voice_change("asr_model", " "),
+            with_voice_change("tts_model", " "),
+            with_voice_change("tts_voice", " "),
+            with_voice_change("tts_response_format", "aac"),
+            with_voice_change("tts_sample_rate", 12345),
+            with_voice_change("tts_volume", -1),
+            with_voice_change("tts_volume", 101),
+            with_voice_change("tts_rate", 0.49),
+            with_voice_change("tts_rate", 2.01),
+            with_voice_change("tts_pitch", 0.49),
+            with_voice_change("tts_pitch", 2.01),
+            with_voice_change("language", "en"),
+        ]
+    )
+    secret_voice = model_configuration_payload()
+    secret_voice["voice"] = {**voice_configuration_payload(), "api_key": "voice-secret"}
+    cases.append(secret_voice)
+
     for index, payload in enumerate(cases):
         request_id = f"94000000-0000-4000-8000-{index:012d}"
         payload["client_request_id"] = request_id
@@ -349,6 +561,7 @@ async def test_invalid_and_secret_bearing_payloads_are_rejected_without_storage(
         assert response.json()["error"]["code"] == "INVALID_MODEL_CONFIG"
         assert response.headers["Cache-Control"] == "no-store"
         assert "must-never-be-stored" not in response.text
+        assert "voice-secret" not in response.text
         assert "api_key=secret" not in response.text
 
     async with app.state.database.session_factory() as session:
@@ -357,6 +570,7 @@ async def test_invalid_and_secret_bearing_payloads_are_rejected_without_storage(
         audits = (await session.scalars(select(AuditLog))).all()
         serialized = json.dumps([audit.details for audit in audits])
         assert "must-never-be-stored" not in serialized
+        assert "voice-secret" not in serialized
         assert "api_key=secret" not in serialized
 
 
@@ -371,6 +585,18 @@ async def test_numeric_boundaries_are_accepted(api: ApiFixture) -> None:
         "top_p": 0,
         "top_k": 1000,
     }
+    voice = voice_configuration_payload()
+    voice.update(
+        {
+            "websocket_url": "wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference",
+            "tts_response_format": "opus",
+            "tts_sample_rate": 48000,
+            "tts_volume": 100,
+            "tts_rate": 2.0,
+            "tts_pitch": 0.5,
+        }
+    )
+    payload["voice"] = voice
     response = await put_configuration(
         client,
         family["access_token"],
@@ -383,6 +609,7 @@ async def test_numeric_boundaries_are_accepted(api: ApiFixture) -> None:
         "top_p": 0.0,
         "top_k": 1000,
     }
+    assert response.json()["configuration"]["voice"] == voice
 
 
 async def test_idempotency_header_must_match_body(api: ApiFixture) -> None:

@@ -52,7 +52,9 @@
 `COMMAND_AVAILABLE`，消息中只携带 `command_id`、类型和序列号，客户端随后通过
 REST 获取详情。用量即时刷新复用该连接发送 `MODEL_USAGE_REPORT_REQUESTED`，只向
 仍持有有效 device credential 的在线老人设备投递。状态检测配置更新同样只向有效老人
-设备发送 `SAFETY_MONITORING_CONFIG_AVAILABLE`。家属可使用短期 access token 建立同一路径
+设备发送 `SAFETY_MONITORING_CONFIG_AVAILABLE`。模型配置事务提交后发送
+`MODEL_CONFIG_AVAILABLE`，`payload` 仅包含新 revision；投递失败不回滚配置，老人端通过
+REST 补拉并热更新。家属可使用短期 access token 建立同一路径
 连接；安全事件提交并落库后，仅向存在有效绑定和查看权限的家属发送
 `SAFETY_EVENT_AVAILABLE`，提示中不包含事件摘要。
 事件证据图像通过独立二进制 REST 接口上传和读取，不进入 WebSocket。图像保存并生成缩略图后，

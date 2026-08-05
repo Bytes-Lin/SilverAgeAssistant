@@ -113,6 +113,7 @@ revision 乐观锁和 `Idempotency-Key`，冲突响应的 `error.details.current
 请求、三种“疑似/需要核实”的异常事件，以及 GUI Agent 超时或失败后请求家属协助点单的
 `GUI_ORDER_ASSISTANCE_REQUIRED`。中台从凭证推导老人和设备身份，并强制
 `FAMILY_REQUEST=GENERAL`，其余身体异常和 GUI 点单协助事件 `=EMERGENCY`，不信任客户端或模型给出的 severity；
+三种疑似异常摘要未包含“疑似”或“需要核实”时，中台会补充“需要核实：”前缀并把总长度限制在 200 字符内，不会因模型摘要缺少固定词而拒绝紧急事件。
 事件先写入 SQLite，再向具备查看权限的在线家属发送不含摘要的
 `SAFETY_EVENT_AVAILABLE`。家属 GET 按中台保存的老人 IANA 时区计算当地今日，事件按
 `occurred_at DESC, server_sequence DESC` 返回；`scope=today` 返回老人当地今日尚未处理的事件，
@@ -148,11 +149,22 @@ PUT /elders/{elder_id}/model-config
 GET /devices/me/model-config
 ```
 
-只同步模型服务地址、模型名、协议方言、上下文长度、最大生成 Token 和三个采样参数。API Key、Authorization 和其他模型凭证禁止经过中台。老人端以 REST 拉取为事实来源并保存到应用私有 `model-config.json`，详细字段、权限、幂等、revision 和验收标准见 [`remote-model-configuration-requirements.md`](remote-model-configuration-requirements.md)。
+现有接口已同步文字模型服务地址、模型名、协议方言、上下文长度、最大生成 Token 和三个
+采样参数，并在同一 revision 配置中同步 ASR/TTS 共用的阿里云百炼 WebSocket
+地址、各自模型名，以及 TTS 音色、格式、采样率、音量、语速、音调和语言。API Key、
+Authorization 和其他模型凭证禁止经过
+中台，包括加密后的 Key。老人端以 REST 拉取为事实来源并保存到应用私有
+`model-config.json`，详细字段、权限、幂等、revision 和验收标准见
+[`remote-model-configuration-requirements.md`](remote-model-configuration-requirements.md)。
 
 `PUT` 请求中的 `client_request_id` 必须与 `Idempotency-Key` 一致。首次创建使用
 `expected_revision: null` 并产生 revision 1；后续更新必须提交当前 revision。相同幂等键
 和相同规范化请求返回第一次成功响应，即使当前配置之后又有更新，也不会重复递增 revision。
+
+配置写入事务提交成功后，中台向在线老人设备发送
+`MODEL_CONFIG_AVAILABLE` WebSocket 最小提示，`payload` 只含 `revision`，不含配置和凭证。
+老人端收到后立即调用 `GET /devices/me/model-config` 热更新；离线设备继续由启动和
+进入聊天时的 REST 拉取补偿。详细事件结构见远程模型配置需求第 6.1 节。
 
 ## 5. SOS
 

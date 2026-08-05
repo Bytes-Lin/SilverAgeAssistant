@@ -140,6 +140,37 @@ class ConnectionManager:
             await self.disconnect(elder_id, device_id, websocket)
         return delivered
 
+    async def notify_model_config_available(
+        self,
+        elder_id: str,
+        active_device_ids: set[str],
+        revision: int,
+    ) -> bool:
+        async with self._lock:
+            targets = [
+                (device_id, websocket)
+                for device_id, websocket in self._connections.get(elder_id, {}).items()
+                if device_id in active_device_ids
+            ]
+        message = {
+            "protocol_version": 1,
+            "message_type": "MODEL_CONFIG_AVAILABLE",
+            "message_id": str(uuid.uuid4()),
+            "sent_at": utc_now().isoformat().replace("+00:00", "Z"),
+            "payload": {"revision": revision},
+        }
+        delivered = False
+        disconnected: list[tuple[str, WebSocket]] = []
+        for device_id, websocket in targets:
+            try:
+                await websocket.send_json(message)
+                delivered = True
+            except Exception:
+                disconnected.append((device_id, websocket))
+        for device_id, websocket in disconnected:
+            await self.disconnect(elder_id, device_id, websocket)
+        return delivered
+
     async def notify_safety_event_available(
         self,
         family_ids: set[str],

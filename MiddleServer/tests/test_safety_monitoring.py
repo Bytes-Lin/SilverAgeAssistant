@@ -313,8 +313,35 @@ async def test_elder_reports_health_and_family_request_with_server_severity_poli
         bound["device_credential"],
         gui_assistance_payload,
     )
+    normalized_abnormality = await post_event(
+        client,
+        bound["device_credential"],
+        event_payload(
+            "b2100000-0000-4000-8000-000000000004",
+            event_type="OTHER_ABNORMALITY",
+            severity="GENERAL",
+            summary="老人长时间躺在床上没有明显动作",
+        ),
+    )
+    normalized_long_abnormality = await post_event(
+        client,
+        bound["device_credential"],
+        event_payload(
+            "b2100000-0000-4000-8000-000000000005",
+            event_type="OTHER_ABNORMALITY",
+            severity="EMERGENCY",
+            summary="异常" * 100,
+        ),
+    )
 
-    assert health.status_code == family_request.status_code == gui_assistance.status_code == 201
+    assert (
+        health.status_code
+        == family_request.status_code
+        == gui_assistance.status_code
+        == normalized_abnormality.status_code
+        == normalized_long_abnormality.status_code
+        == 201
+    )
     assert gui_retry.status_code == 201
     assert gui_retry.json() == gui_assistance.json()
     assert health.json()["event_type"] == "HEALTH_DISCOMFORT_REPORTED"
@@ -323,9 +350,15 @@ async def test_elder_reports_health_and_family_request_with_server_severity_poli
     assert family_request.json()["severity"] == "GENERAL"
     assert gui_assistance.json()["event_type"] == "GUI_ORDER_ASSISTANCE_REQUIRED"
     assert gui_assistance.json()["severity"] == "EMERGENCY"
+    assert normalized_abnormality.json()["severity"] == "EMERGENCY"
+    assert normalized_abnormality.json()["event_summary"] == (
+        "需要核实：老人长时间躺在床上没有明显动作"
+    )
+    assert normalized_long_abnormality.json()["event_summary"].startswith("需要核实：")
+    assert len(normalized_long_abnormality.json()["event_summary"]) == 200
 
     notifier = app.state.connection_manager.notify_safety_event_available
-    assert notifier.await_count == 3
+    assert notifier.await_count == 5
     assert notifier.await_args_list[0].args[1] == elder["elder_id"]
     assert notifier.await_args_list[0].args[4] == "EMERGENCY"
     assert notifier.await_args_list[1].args[4] == "GENERAL"
@@ -338,6 +371,8 @@ async def test_elder_reports_health_and_family_request_with_server_severity_poli
             ("HEALTH_DISCOMFORT_REPORTED", "EMERGENCY"),
             ("FAMILY_REQUEST", "GENERAL"),
             ("GUI_ORDER_ASSISTANCE_REQUIRED", "EMERGENCY"),
+            ("OTHER_ABNORMALITY", "EMERGENCY"),
+            ("OTHER_ABNORMALITY", "EMERGENCY"),
         ]
 
 
@@ -348,7 +383,6 @@ async def test_event_validation_rate_limit_and_today_query(api: ApiFixture) -> N
 
     invalid_payloads = [
         event_payload(str(uuid4()), event_type="CERTAIN_FALL"),
-        event_payload(str(uuid4()), summary="老人已经跌倒。"),
         event_payload(str(uuid4()), occurred_at=utc_now().replace(tzinfo=None).isoformat()),
         event_payload(
             str(uuid4()),

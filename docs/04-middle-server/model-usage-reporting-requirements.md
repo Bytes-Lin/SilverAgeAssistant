@@ -7,7 +7,8 @@
 - 老人设备直接调用 MLLM、ASR、TTS，中台不代理这些请求。
 - 老人设备按小时向中台汇报聚合用量。
 - 家属只能查询与自己有效绑定的老人档案用量。
-- MLLM 统计输入、输出 Token 和调用次数；ASR、TTS 首版统计调用次数，并保留音频时长、TTS 字符数扩展字段。
+- MLLM 统计输入、输出 Token 和调用次数；ASR、TTS 只统计调用次数，不统计音频时长、
+  字符数或聊天/通知/新闻来源明细。
 - 统计是客户端记录或估算，不得描述为云模型厂商正式账单。
 - 不上传 API Key、提示词、聊天正文、Tool 参数/结果、音频、图片或精确位置。
 
@@ -37,11 +38,11 @@
 | `modality` | `MLLM` / `ASR` / `TTS` |
 | `provider` | 最长 80 字符，如 `openai_compatible` |
 | `model` | 可空，最长 120 字符 |
-| `feature` | 最长 80 字符，如 `conversation` |
+| `feature` | 最长 80 字符；ASR/TTS 使用统一稳定值，不按业务来源拆分 |
 | `request_count` / `success_count` | 非负整数，且成功数不大于请求数 |
 | `input_tokens` / `output_tokens` | MLLM 非负整数 |
-| `asr_audio_duration_ms` | ASR 非负整数 |
-| `tts_character_count` / `tts_audio_duration_ms` | TTS 非负整数 |
+| `asr_audio_duration_ms` | 兼容字段；语音 MVP 固定为 0，不参与统计 |
+| `tts_character_count` / `tts_audio_duration_ms` | 兼容字段；语音 MVP 固定为 0，不参与统计 |
 | `contains_estimated_values` | 是否包含本地估算 |
 
 同一批次内可按 `modality + provider + model + feature` 聚合保存。服务端不得从用量字段反推出或保存聊天内容。
@@ -190,7 +191,7 @@ Authorization: Bearer <family_access_token>
 - 尚无位置时区时可使用设备上报的 `SYSTEM_FALLBACK`，响应必须原样返回
   `timezone_source`，Android 向家属显示降级提示。
 - `days` 按日期升序，建议返回范围内全部日期；没有用量的日期 totals 全为 0。
-- Token 仅累计 MLLM；ASR/TTS 分别累计调用次数及已有扩展计量字段。
+- Token 仅累计 MLLM；ASR/TTS 分别只累计调用次数，兼容扩展计量字段不得进入产品统计。
 - 不返回单次调用记录、具体聊天时间、提示词、回复或音频。
 - Android 使用响应的 `current_date` 桶展示“今日用量”，不能使用家属手机日期；
   使用全部桶绘制本月 Token 及 ASR/TTS 柱状图。

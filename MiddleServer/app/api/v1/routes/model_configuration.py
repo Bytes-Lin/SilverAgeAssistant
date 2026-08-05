@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
+    get_connection_manager,
     get_current_device,
     get_current_family,
     get_database,
@@ -18,6 +19,7 @@ from app.schemas.model_configuration import (
     ModelConfigurationUpdateRequest,
 )
 from app.services.model_configuration import ModelConfigurationService
+from app.websocket.manager import ConnectionManager
 
 router = APIRouter(tags=["model-configuration"])
 
@@ -31,13 +33,18 @@ error_responses: dict[int | str, dict[str, Any]] = {
 }
 
 
-def service(session: AsyncSession, database: Database) -> ModelConfigurationService:
-    return ModelConfigurationService(session, database.model_configuration_lock)
+def service(
+    session: AsyncSession,
+    database: Database,
+    manager: ConnectionManager,
+) -> ModelConfigurationService:
+    return ModelConfigurationService(session, database.model_configuration_lock, manager)
 
 
 @router.get(
     "/elders/{elder_id}/model-config",
     response_model=ModelConfigurationResponse,
+    response_model_exclude_none=True,
     responses=error_responses,
     summary="Get an elder's non-sensitive model configuration as family",
 )
@@ -47,8 +54,9 @@ async def get_family_model_configuration(
     family: FamilyAccount = Depends(get_current_family),
     session: AsyncSession = Depends(get_session),
     database: Database = Depends(get_database),
+    manager: ConnectionManager = Depends(get_connection_manager),
 ) -> ModelConfigurationResponse:
-    result = await service(session, database).get_for_family(family, str(elder_id))
+    result = await service(session, database, manager).get_for_family(family, str(elder_id))
     response.headers["Cache-Control"] = "no-store"
     return result
 
@@ -56,6 +64,7 @@ async def get_family_model_configuration(
 @router.put(
     "/elders/{elder_id}/model-config",
     response_model=ModelConfigurationResponse,
+    response_model_exclude_none=True,
     responses=error_responses,
     summary="Create or update an elder's non-sensitive model configuration",
 )
@@ -67,8 +76,9 @@ async def update_family_model_configuration(
     family: FamilyAccount = Depends(get_current_family),
     session: AsyncSession = Depends(get_session),
     database: Database = Depends(get_database),
+    manager: ConnectionManager = Depends(get_connection_manager),
 ) -> ModelConfigurationResponse:
-    result = await service(session, database).update_for_family(
+    result = await service(session, database, manager).update_for_family(
         family,
         str(elder_id),
         payload,
@@ -81,6 +91,7 @@ async def update_family_model_configuration(
 @router.get(
     "/devices/me/model-config",
     response_model=ModelConfigurationResponse,
+    response_model_exclude_none=True,
     responses=error_responses,
     summary="Get the bound elder device's non-sensitive model configuration",
 )
@@ -89,7 +100,8 @@ async def get_device_model_configuration(
     device: DeviceCredential = Depends(get_current_device),
     session: AsyncSession = Depends(get_session),
     database: Database = Depends(get_database),
+    manager: ConnectionManager = Depends(get_connection_manager),
 ) -> ModelConfigurationResponse:
-    result = await service(session, database).get_for_device(device)
+    result = await service(session, database, manager).get_for_device(device)
     response.headers["Cache-Control"] = "no-store"
     return result

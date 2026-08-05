@@ -124,6 +124,45 @@ class ElderModelConfiguration(Base):
             "reasoning_enabled = 0",
             name="ck_model_config_reasoning_disabled",
         ),
+        CheckConstraint(
+            "(voice_websocket_url IS NULL AND voice_asr_model IS NULL "
+            "AND voice_tts_model IS NULL AND voice_tts_voice IS NULL "
+            "AND voice_tts_response_format IS NULL AND voice_tts_sample_rate IS NULL "
+            "AND voice_tts_volume IS NULL AND voice_tts_rate IS NULL "
+            "AND voice_tts_pitch IS NULL AND voice_language IS NULL) OR "
+            "(voice_websocket_url IS NOT NULL AND voice_asr_model IS NOT NULL "
+            "AND voice_tts_model IS NOT NULL AND voice_tts_voice IS NOT NULL "
+            "AND voice_tts_response_format IS NOT NULL AND voice_tts_sample_rate IS NOT NULL "
+            "AND voice_tts_volume IS NOT NULL AND voice_tts_rate IS NOT NULL "
+            "AND voice_tts_pitch IS NOT NULL AND voice_language IS NOT NULL)",
+            name="ck_model_config_voice_all_or_none",
+        ),
+        CheckConstraint(
+            "voice_tts_response_format IS NULL OR "
+            "voice_tts_response_format IN ('pcm', 'wav', 'mp3', 'opus')",
+            name="ck_model_config_voice_format",
+        ),
+        CheckConstraint(
+            "voice_tts_sample_rate IS NULL OR "
+            "voice_tts_sample_rate IN (8000, 16000, 22050, 24000, 44100, 48000)",
+            name="ck_model_config_voice_sample_rate",
+        ),
+        CheckConstraint(
+            "voice_tts_volume IS NULL OR (voice_tts_volume >= 0 AND voice_tts_volume <= 100)",
+            name="ck_model_config_voice_volume",
+        ),
+        CheckConstraint(
+            "voice_tts_rate IS NULL OR (voice_tts_rate >= 0.5 AND voice_tts_rate <= 2)",
+            name="ck_model_config_voice_rate",
+        ),
+        CheckConstraint(
+            "voice_tts_pitch IS NULL OR (voice_tts_pitch >= 0.5 AND voice_tts_pitch <= 2)",
+            name="ck_model_config_voice_pitch",
+        ),
+        CheckConstraint(
+            "voice_language IS NULL OR voice_language = 'zh'",
+            name="ck_model_config_voice_language",
+        ),
         UniqueConstraint("elder_id", name="uq_elder_model_config_elder"),
     )
 
@@ -140,6 +179,16 @@ class ElderModelConfiguration(Base):
     top_p: Mapped[Decimal] = mapped_column(Numeric(6, 4))
     top_k: Mapped[int] = mapped_column(Integer)
     reasoning_enabled: Mapped[bool] = mapped_column(Boolean)
+    voice_websocket_url: Mapped[str | None] = mapped_column(String(500))
+    voice_asr_model: Mapped[str | None] = mapped_column(String(120))
+    voice_tts_model: Mapped[str | None] = mapped_column(String(120))
+    voice_tts_voice: Mapped[str | None] = mapped_column(String(120))
+    voice_tts_response_format: Mapped[str | None] = mapped_column(String(10))
+    voice_tts_sample_rate: Mapped[int | None] = mapped_column(Integer)
+    voice_tts_volume: Mapped[int | None] = mapped_column(Integer)
+    voice_tts_rate: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    voice_tts_pitch: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    voice_language: Mapped[str | None] = mapped_column(String(10))
     updated_by_family_id: Mapped[str] = mapped_column(ForeignKey("family_accounts.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

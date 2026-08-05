@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +22,17 @@ from app.schemas.model_configuration import (
     ModelConfigurationUpdateRequest,
     ModelDialect,
     ModelSamplingConfiguration,
+    VoiceModelConfiguration,
 )
+
+
+class ModelConfigurationNotifier(Protocol):
+    async def notify_model_config_available(
+        self,
+        elder_id: str,
+        active_device_ids: set[str],
+        revision: int,
+    ) -> bool: ...
 
 
 class ModelConfigurationService:
@@ -29,9 +40,11 @@ class ModelConfigurationService:
         self,
         session: AsyncSession,
         model_configuration_lock: asyncio.Lock,
+        notifier: ModelConfigurationNotifier,
     ) -> None:
         self.session = session
         self.model_configuration_lock = model_configuration_lock
+        self.notifier = notifier
         self.repository = ModelConfigurationRepository(session)
 
     async def get_for_family(
@@ -100,6 +113,7 @@ class ModelConfigurationService:
 
                 now = utc_now()
                 revision = (current_revision or 0) + 1
+                voice = request.voice
                 if current is None:
                     saved = await self.repository.create_configuration(
                         elder_id=elder_id,
@@ -114,6 +128,18 @@ class ModelConfigurationService:
                         top_p=request.sampling.top_p,
                         top_k=request.sampling.top_k,
                         reasoning_enabled=request.reasoning_enabled,
+                        voice_websocket_url=voice.websocket_url if voice else None,
+                        voice_asr_model=voice.asr_model if voice else None,
+                        voice_tts_model=voice.tts_model if voice else None,
+                        voice_tts_voice=voice.tts_voice if voice else None,
+                        voice_tts_response_format=(
+                            voice.tts_response_format.value if voice else None
+                        ),
+                        voice_tts_sample_rate=voice.tts_sample_rate if voice else None,
+                        voice_tts_volume=voice.tts_volume if voice else None,
+                        voice_tts_rate=voice.tts_rate if voice else None,
+                        voice_tts_pitch=voice.tts_pitch if voice else None,
+                        voice_language=voice.language if voice else None,
                         family_id=family.id,
                         client_request_id=request_id,
                         now=now,
@@ -132,6 +158,18 @@ class ModelConfigurationService:
                         top_p=request.sampling.top_p,
                         top_k=request.sampling.top_k,
                         reasoning_enabled=request.reasoning_enabled,
+                        voice_websocket_url=voice.websocket_url if voice else None,
+                        voice_asr_model=voice.asr_model if voice else None,
+                        voice_tts_model=voice.tts_model if voice else None,
+                        voice_tts_voice=voice.tts_voice if voice else None,
+                        voice_tts_response_format=(
+                            voice.tts_response_format.value if voice else None
+                        ),
+                        voice_tts_sample_rate=voice.tts_sample_rate if voice else None,
+                        voice_tts_volume=voice.tts_volume if voice else None,
+                        voice_tts_rate=voice.tts_rate if voice else None,
+                        voice_tts_pitch=voice.tts_pitch if voice else None,
+                        voice_language=voice.language if voice else None,
                         family_id=family.id,
                         client_request_id=request_id,
                         now=now,
@@ -154,7 +192,18 @@ class ModelConfigurationService:
                     model=saved.model,
                     dialect=saved.dialect,
                 )
-                return response
+                active_device_ids = await self.repository.list_active_device_ids(elder_id)
+
+        try:
+            await self.notifier.notify_model_config_available(
+                elder_id,
+                active_device_ids,
+                response.revision,
+            )
+        except Exception:
+            # The REST read path remains authoritative when a best-effort hint fails.
+            pass
+        return response
 
     async def _require_family_binding(self, family_id: str, elder_id: str) -> Binding:
         elder = await self.repository.get_elder(elder_id)
@@ -198,6 +247,30 @@ class ModelConfigurationService:
     def _response(
         configuration: ElderModelConfiguration,
     ) -> ModelConfigurationResponse:
+        voice = None
+        if configuration.voice_websocket_url is not None:
+            voice = VoiceModelConfiguration.model_validate(
+                {
+                    "websocket_url": configuration.voice_websocket_url,
+                    "asr_model": configuration.voice_asr_model,
+                    "tts_model": configuration.voice_tts_model,
+                    "tts_voice": configuration.voice_tts_voice,
+                    "tts_response_format": configuration.voice_tts_response_format,
+                    "tts_sample_rate": configuration.voice_tts_sample_rate,
+                    "tts_volume": configuration.voice_tts_volume,
+                    "tts_rate": (
+                        float(configuration.voice_tts_rate)
+                        if configuration.voice_tts_rate is not None
+                        else None
+                    ),
+                    "tts_pitch": (
+                        float(configuration.voice_tts_pitch)
+                        if configuration.voice_tts_pitch is not None
+                        else None
+                    ),
+                    "language": configuration.voice_language,
+                }
+            )
         return ModelConfigurationResponse(
             configuration=ModelConfiguration(
                 schema_version=1,
@@ -212,6 +285,7 @@ class ModelConfigurationService:
                     top_k=configuration.top_k,
                 ),
                 reasoning_enabled=False,
+                voice=voice,
             ),
             revision=configuration.revision,
             updated_at=ensure_utc(configuration.updated_at),
