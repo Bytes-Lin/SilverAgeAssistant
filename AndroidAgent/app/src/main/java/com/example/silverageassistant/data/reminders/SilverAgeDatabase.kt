@@ -6,6 +6,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.example.silverageassistant.data.gui.GuiTodoDao
+import com.example.silverageassistant.data.gui.GuiTodoEntity
 import com.example.silverageassistant.data.usage.ModelUsageDao
 import com.example.silverageassistant.data.usage.ModelUsageEntity
 
@@ -13,14 +15,17 @@ import com.example.silverageassistant.data.usage.ModelUsageEntity
     entities = [
         ReminderEntity::class,
         ModelUsageEntity::class,
+        GuiTodoEntity::class,
     ],
-    version = 2,
+    version = 4,
     exportSchema = false,
 )
 abstract class SilverAgeDatabase : RoomDatabase() {
     abstract fun reminderDao(): ReminderDao
 
     abstract fun modelUsageDao(): ModelUsageDao
+
+    abstract fun guiTodoDao(): GuiTodoDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -66,6 +71,39 @@ abstract class SilverAgeDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `gui_todos` (
+                        `id` TEXT NOT NULL,
+                        `content` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `failed_run_count` INTEGER NOT NULL,
+                        `created_at_epoch_millis` INTEGER NOT NULL,
+                        `updated_at_epoch_millis` INTEGER NOT NULL,
+                        `family_escalation_event_id` TEXT,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `reminders` ADD COLUMN `voice_announcement_state` TEXT NOT NULL DEFAULT 'NONE'",
+                )
+                db.execSQL(
+                    "ALTER TABLE `reminders` ADD COLUMN `voice_announced_at_epoch_millis` INTEGER",
+                )
+                db.execSQL(
+                    "ALTER TABLE `reminders` ADD COLUMN `voice_attempt_count` INTEGER NOT NULL DEFAULT 0",
+                )
+            }
+        }
+
         @Volatile
         private var instance: SilverAgeDatabase? = null
 
@@ -74,7 +112,7 @@ abstract class SilverAgeDatabase : RoomDatabase() {
                 context.applicationContext,
                 SilverAgeDatabase::class.java,
                 "silverage.db",
-            ).addMigrations(MIGRATION_1_2)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
                 .also { instance = it }
         }

@@ -1,10 +1,20 @@
 # MILESTONE 05：Agent Tool Use 与生活助手
 
 - [x] Tool schema、注册表和多轮 Tool Call 编排；
+- [x] GUI Agent 异步 Tool 门面、单任务调度、两次完整运行和最小 Todo 核心；
+- [x] 主聊天/GUI Agent 共享时间 Tool 目录及独立用量标签；
+- [x] 主聊天/GUI Agent 共享 ASR/TTS Provider 接口（具体语音实现待接入）；
+- [x] GUI 截图像素预算、resize 几何与归一化坐标反向映射核心；
+- [x] 主聊天注册 `gui_agent`，明确的美团打开请求可创建异步 Todo 并按包名启动真机 App；
+- [x] Android 11+ Accessibility 截图、节点树、MLLM 单步规划、点击/输入/滚动和截图坐标回映；
+- [x] 跨 App 顶部控制条截图隔离、Agent 动作事件抑制及支付/验证码确定性安全门；
+- [x] 应用内顶部暂停/继续/返回任务、禁用语音占位和二次确认取消控制条；
+- [x] 经用户启用的 Accessibility 系统控制覆盖层及人工交互/离开目标 App 暂停事件；
 - [ ] Policy Engine；
 - [ ] Task 状态机；
 - [x] 时间、天气、家属电话和向家属报告情况工具；
-- [ ] 本地音乐、新闻和提醒工具；
+- [x] 百度热搜新闻 Provider、前 15 条文字列表和 2 小时暂存；
+- [ ] 新闻 Agent Tool、TTS 播报和提醒工具；
 - [ ] RAG；
 - [ ] 无障碍服务最小原型；
 - [ ] 模拟外卖 App 测试；

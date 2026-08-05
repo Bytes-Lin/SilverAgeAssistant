@@ -53,9 +53,9 @@
 
 老人端直接调用模型，因此家属端看到的是客户端上报的统计/估算：
 
-- ASR 音频秒数；
+- ASR 调用次数；
 - LLM 输入/输出 Token（可获取时）；
-- TTS 字符数/音频秒数；
+- TTS 调用次数；
 - 请求次数；
 - 本地估算费用；
 - 每日/月度阈值。
@@ -87,10 +87,16 @@ Open-Meteo `timezone=auto`，成功后将返回的 IANA 时区保存在本地，
 - 上下文长度 Token；
 - 最大生成 Token；
 - `temperature`、`top_p`、`top_k`。
+- ASR/TTS 共用的阿里云百炼 WebSocket 地址；
+- ASR、TTS 模型名称，以及 TTS 音色、输出格式、采样率、音量、语速、音调和语言。
 
-日常聊天思考模式固定关闭。配置由中台可靠保存，老人端在启动及进入聊天时使用 device credential 补拉，通过校验后原子写入应用私有 `files/agent/model-config.json`，下一轮聊天直接读取最新值。拉取失败保留上次可用配置。
+日常聊天思考模式固定关闭。配置由中台可靠保存，老人端在启动及进入聊天时使用 device credential 补拉；在线时收到 `MODEL_CONFIG_AVAILABLE` 后立即补拉。新配置通过校验后原子写入应用私有 `files/agent/model-config.json`，下一轮模型请求直接读取最新值，不要求老人重启应用。拉取失败保留上次可用配置。
 
-API Key 不在家属页面填写、不经过中台，也不进入配置 JSON。正式云端 Key 继续只由老人设备的 Keystore 加密存储管理。开发用无密钥 llama-server 可以直接使用远程非敏感配置。中台接口见 [`../04-middle-server/remote-model-configuration-requirements.md`](../04-middle-server/remote-model-configuration-requirements.md)。
+API Key 不在家属页面填写、不经过中台，也不进入配置 JSON。ASR 和 TTS 共用一把语音
+Key，在老人设备本机配置；其存储复用 MLLM Key 的 Keystore + AES-GCM 方案，但使用独立
+凭证槽位。开发用无密钥服务可以直接使用远程非敏感配置。Android 已完成语音配置表单、
+远程 JSON 映射、本地原子保存和老人补拉热更新；中台字段扩展完成后即可联调。接口扩展见
+[`../04-middle-server/remote-model-configuration-requirements.md`](../04-middle-server/remote-model-configuration-requirements.md)。
 
 ## 3. 隐私边界
 

@@ -13,6 +13,20 @@ enum class StoredReminderStatus {
     SNOOZED,
 }
 
+enum class VoiceAnnouncementState {
+    NONE,
+    PENDING,
+    SPOKEN,
+    FAILED,
+    EXPIRED,
+}
+
+data class RemoteCommandSaveResult(
+    val inserted: Boolean,
+    val reminderId: String,
+    val voiceAnnouncementPending: Boolean,
+)
+
 data class StoredReminder(
     val id: String,
     val title: String,
@@ -27,10 +41,29 @@ data class PendingCommandAcknowledgement(
     val storedAtEpochMillis: Long,
 )
 
+data class PendingVoiceAnnouncement(
+    val reminderId: String,
+    val sourceDisplayName: String?,
+    val content: String,
+    val storedAtEpochMillis: Long,
+)
+
 interface ReminderRepository {
     val reminders: Flow<List<StoredReminder>>
 
     suspend fun saveRemoteCommand(command: RemoteCommand)
+
+    suspend fun saveRemoteCommandWithResult(
+        command: RemoteCommand,
+        voiceAnnouncementEnabled: Boolean = false,
+    ): RemoteCommandSaveResult {
+        saveRemoteCommand(command)
+        return RemoteCommandSaveResult(
+            inserted = false,
+            reminderId = command.commandId,
+            voiceAnnouncementPending = false,
+        )
+    }
 
     suspend fun lastServerSequence(): Long
 
@@ -39,6 +72,10 @@ interface ReminderRepository {
     suspend fun markAcknowledged(commandId: String)
 
     suspend fun updateStatus(id: String, status: StoredReminderStatus)
+
+    suspend fun markVoiceAnnouncement(id: String, state: VoiceAnnouncementState) = Unit
+
+    suspend fun pendingVoiceAnnouncements(): List<PendingVoiceAnnouncement> = emptyList()
 }
 
 class RoomReminderRepository(
@@ -58,13 +95,22 @@ class RoomReminderRepository(
     }
 
     override suspend fun saveRemoteCommand(command: RemoteCommand) {
+        saveRemoteCommandWithResult(command, voiceAnnouncementEnabled = false)
+    }
+
+    override suspend fun saveRemoteCommandWithResult(
+        command: RemoteCommand,
+        voiceAnnouncementEnabled: Boolean,
+    ): RemoteCommandSaveResult {
         val storedAt = nowEpochMillis()
         val scheduledAt = if (command.type == RemoteCommandType.FAMILY_NOTIFICATION) {
             Instant.ofEpochMilli(storedAt)
         } else {
             command.scheduledAt?.let(::parseInstant) ?: parseInstant(command.createdAt)
         }
-        dao.insert(
+        val voicePending = command.type == RemoteCommandType.FAMILY_NOTIFICATION &&
+            voiceAnnouncementEnabled
+        val inserted = dao.insert(
             ReminderEntity(
                 id = command.commandId,
                 serverCommandId = command.commandId,
@@ -82,7 +128,19 @@ class RoomReminderRepository(
                 storedAtEpochMillis = storedAt,
                 status = StoredReminderStatus.PENDING.name,
                 acknowledged = false,
+                voiceAnnouncementState = if (voicePending) {
+                    VoiceAnnouncementState.PENDING.name
+                } else {
+                    VoiceAnnouncementState.NONE.name
+                },
+                voiceAnnouncedAtEpochMillis = null,
+                voiceAttemptCount = 0,
             ),
+        ) != -1L
+        return RemoteCommandSaveResult(
+            inserted = inserted,
+            reminderId = command.commandId,
+            voiceAnnouncementPending = inserted && voicePending,
         )
     }
 
@@ -100,6 +158,24 @@ class RoomReminderRepository(
     override suspend fun updateStatus(id: String, status: StoredReminderStatus) {
         dao.updateStatus(id, status.name)
     }
+
+    override suspend fun markVoiceAnnouncement(id: String, state: VoiceAnnouncementState) {
+        dao.updateVoiceAnnouncement(
+            id = id,
+            state = state.name,
+            announcedAt = if (state == VoiceAnnouncementState.SPOKEN) nowEpochMillis() else null,
+        )
+    }
+
+    override suspend fun pendingVoiceAnnouncements(): List<PendingVoiceAnnouncement> =
+        dao.pendingVoiceAnnouncements().map { entity ->
+            PendingVoiceAnnouncement(
+                reminderId = entity.id,
+                sourceDisplayName = entity.sourceDisplayName,
+                content = entity.detail,
+                storedAtEpochMillis = entity.storedAtEpochMillis,
+            )
+        }
 
     private fun ReminderEntity.toStoredReminder() = StoredReminder(
         id = id,

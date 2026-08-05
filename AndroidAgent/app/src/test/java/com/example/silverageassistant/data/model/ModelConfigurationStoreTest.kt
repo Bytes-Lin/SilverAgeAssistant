@@ -4,6 +4,7 @@ import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,6 +25,10 @@ class ModelConfigurationStoreTest {
             contextWindowTokens = 65536,
             maxOutputTokens = 768,
             temperature = 0.7,
+            voice = VoiceRuntimeConfiguration(
+                webSocketUrl =
+                    "wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+            ),
         )
 
         firstStore.save(saved)
@@ -35,6 +40,8 @@ class ModelConfigurationStoreTest {
         assertTrue(json.contains("\"reasoning_enabled\": false"))
         assertFalse(json.contains("api_key", ignoreCase = true))
         assertFalse(json.contains("verification_token", ignoreCase = true))
+        assertTrue(json.contains("\"asr_model\": \"qwen-audio-3.0-asr-flash-streaming\""))
+        assertTrue(json.contains("\"tts_voice\": \"longanfengyue\""))
     }
 
     @Test
@@ -69,6 +76,7 @@ class ModelConfigurationStoreTest {
         store.initialize()
 
         assertEquals(32768, store.configuration.value.contextWindowTokens)
+        assertNull(store.configuration.value.voice)
     }
 
     @Test

@@ -69,7 +69,7 @@ class CallFamilyContactTool(
 ) : AgentTool {
     override val definition = ChatToolDefinition(
         name = NAME,
-        description = "准备给已绑定的家属打电话。只提供家属称呼或关系，不要提供、推测或生成手机号。",
+        description = "给已绑定的家属打电话。只提供家属称呼或关系，不要提供、推测或生成手机号。",
         parametersJson = """
             {
               "type": "object",

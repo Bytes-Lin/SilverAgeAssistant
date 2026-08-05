@@ -66,7 +66,7 @@ SilverAgeAssistant/
 5. [`M05：Agent Tool Use 与生活助手`](docs/06-development/milestones/M05-agent-tools.md)
 6. [`M06：SOS、图像接口与安全测试`](docs/06-development/milestones/M06-safety-and-testing.md)
 
-老人端和家属端基础 UI 已完成。当前已实现文字流式 MLLM 聊天、长期记忆基础、天气/电话/家属报告 Tool、家属注册绑定与会话恢复、联系人同步、通知和一次性提醒、远程模型配置、全局模型用量及家属图表，以及带动态间隔、连续异常策略、短信和证据图像的独立状态监控 Agent。ASR/TTS、本地提醒调度、完整记忆治理、通用 Policy/任务状态机、GUI Agent、网购外卖、本地音乐、SOS 和真实摄像头接入尚未完成。逐项进度见 [`开发 TODO`](docs/08-roadmap/todo.md)，下一次 Agent/GUI Agent 开发会话先阅读 [`Android 粗审与交接记录`](docs/06-development/android-review-handoff-2026-07-30.md)。
+老人端和家属端基础 UI 已完成。当前已实现文字流式 MLLM 聊天、老人端全局语音开关、Qwen ASR/TTS WebSocket、按住说话与完整回答播报、通知和新闻播报、长期记忆基础、天气/电话/家属报告 Tool、百度热搜新闻文字列表与暂存、家属注册绑定与会话恢复、联系人同步、通知和一次性提醒、远程模型配置、全局模型用量及家属图表，以及带动态间隔、连续异常策略、短信和证据图像的独立状态监控 Agent。语音真机兼容性与系统 TTS 降级、本地提醒调度、完整记忆治理、通用 Policy/任务状态机、GUI Agent 完善、网购外卖、SOS 和真实摄像头接入尚未完成。逐项进度见 [`开发 TODO`](docs/08-roadmap/todo.md)，下一次 Agent/GUI Agent 开发会话先阅读 [`Android 粗审与交接记录`](docs/06-development/android-review-handoff-2026-07-30.md)。
 
 中台首版采用 SQLite 本地数据库，以单进程轻量开发和联调为目标；不引入 PostgreSQL、Redis、Docker 数据库依赖、`.env.example` 或 `infra/`。如后续出现多实例部署、并发写入或共享在线状态需求，再单独评估数据库和缓存迁移。
 
@@ -81,7 +81,7 @@ SilverAgeAssistant/
 → 播放与状态反馈
 ```
 
-其中适老化 UI、文字 MLLM 和状态反馈基础已经完成，录音、ASR、TTS 与播放仍待接入。
+其中适老化 UI、文字 MLLM、内存录音、Qwen ASR/TTS 与 PCM 播放代码已经接入，仍需完成真机协议联调和兼容性验收。
 
 ## 技术边界
 

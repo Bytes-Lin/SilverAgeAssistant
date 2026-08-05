@@ -10,6 +10,8 @@ import com.example.silverageassistant.data.middleserver.MiddleServerRequestExcep
 import com.example.silverageassistant.data.model.ModelConfigurationStore
 import com.example.silverageassistant.data.model.ModelRuntimeConfiguration
 import com.example.silverageassistant.data.model.OpenAiCompatibleDialect
+import com.example.silverageassistant.data.model.VoiceAudioFormat
+import com.example.silverageassistant.data.model.VoiceRuntimeConfiguration
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -28,6 +30,16 @@ data class ModelConfigurationUiState(
     val temperature: String = "0.6",
     val topP: String = "0.9",
     val topK: String = "40",
+    val voiceWebSocketUrl: String = "",
+    val asrModel: String = VoiceRuntimeConfiguration.DEFAULT_ASR_MODEL,
+    val ttsModel: String = VoiceRuntimeConfiguration.DEFAULT_TTS_MODEL,
+    val ttsVoice: String = VoiceRuntimeConfiguration.DEFAULT_TTS_VOICE,
+    val ttsResponseFormat: VoiceAudioFormat = VoiceAudioFormat.Pcm,
+    val ttsSampleRate: String = VoiceRuntimeConfiguration.DEFAULT_TTS_SAMPLE_RATE.toString(),
+    val ttsVolume: String = VoiceRuntimeConfiguration.DEFAULT_TTS_VOLUME.toString(),
+    val ttsRate: String = VoiceRuntimeConfiguration.DEFAULT_TTS_RATE.toString(),
+    val ttsPitch: String = VoiceRuntimeConfiguration.DEFAULT_TTS_PITCH.toString(),
+    val voiceLanguage: String = VoiceRuntimeConfiguration.DEFAULT_LANGUAGE,
     val revision: Long? = null,
     val isLoading: Boolean = false,
     val isSaving: Boolean = false,
@@ -159,6 +171,24 @@ class ModelConfigurationViewModel(
         updateDraft { copy(temperature = value.filterDecimal().take(5)) }
     fun updateTopP(value: String) = updateDraft { copy(topP = value.filterDecimal().take(5)) }
     fun updateTopK(value: String) = updateDraft { copy(topK = value.filter(Char::isDigit).take(4)) }
+    fun updateVoiceWebSocketUrl(value: String) =
+        updateDraft { copy(voiceWebSocketUrl = value.take(500)) }
+    fun updateAsrModel(value: String) = updateDraft { copy(asrModel = value.take(120)) }
+    fun updateTtsModel(value: String) = updateDraft { copy(ttsModel = value.take(120)) }
+    fun updateTtsVoice(value: String) = updateDraft { copy(ttsVoice = value.take(120)) }
+    fun updateTtsResponseFormat(value: VoiceAudioFormat) =
+        updateDraft { copy(ttsResponseFormat = value) }
+    fun updateTtsSampleRate(value: String) =
+        updateDraft { copy(ttsSampleRate = value.filter(Char::isDigit).take(5)) }
+    fun updateTtsVolume(value: String) =
+        updateDraft { copy(ttsVolume = value.filter(Char::isDigit).take(3)) }
+    fun updateTtsRate(value: String) =
+        updateDraft { copy(ttsRate = value.filterDecimal().take(4)) }
+    fun updateTtsPitch(value: String) =
+        updateDraft { copy(ttsPitch = value.filterDecimal().take(4)) }
+    fun updateVoiceLanguage(value: String) = updateDraft {
+        copy(voiceLanguage = value.filter { it.isLetter() || it == '-' }.take(10))
+    }
 
     private fun updateDraft(transform: ModelConfigurationUiState.() -> ModelConfigurationUiState) {
         pendingRequestId = null
@@ -179,6 +209,30 @@ class ModelConfigurationViewModel(
             ?: return fieldFailure("请填写 Top-p")
         val topK = state.topK.toIntOrNull()
             ?: return fieldFailure("请填写 Top-k")
+        val voice = if (state.voiceWebSocketUrl.isBlank()) {
+            null
+        } else {
+            val sampleRate = state.ttsSampleRate.toIntOrNull()
+                ?: return fieldFailure("请填写 TTS 采样率")
+            val volume = state.ttsVolume.toIntOrNull()
+                ?: return fieldFailure("请填写 TTS 音量")
+            val rate = state.ttsRate.toDoubleOrNull()
+                ?: return fieldFailure("请填写 TTS 语速")
+            val pitch = state.ttsPitch.toDoubleOrNull()
+                ?: return fieldFailure("请填写 TTS 音调")
+            VoiceRuntimeConfiguration(
+                webSocketUrl = state.voiceWebSocketUrl.trim().trimEnd('/'),
+                asrModel = state.asrModel.trim(),
+                ttsModel = state.ttsModel.trim(),
+                ttsVoice = state.ttsVoice.trim(),
+                ttsResponseFormat = state.ttsResponseFormat,
+                ttsSampleRate = sampleRate,
+                ttsVolume = volume,
+                ttsRate = rate,
+                ttsPitch = pitch,
+                language = state.voiceLanguage.trim(),
+            )
+        }
         val parsed = runCatching {
             ModelRuntimeConfiguration(
                 revision = state.revision ?: 0,
@@ -190,6 +244,7 @@ class ModelConfigurationViewModel(
                 temperature = temperature,
                 topP = topP,
                 topK = topK,
+                voice = voice,
             ).also { it.validate(allowCleartextHttp) }
         }
         val error = parsed.exceptionOrNull()?.message
@@ -244,6 +299,17 @@ private fun ModelRuntimeConfiguration.toUiState() = ModelConfigurationUiState(
     temperature = temperature.toString(),
     topP = topP.toString(),
     topK = topK.toString(),
+    voiceWebSocketUrl = voice?.webSocketUrl.orEmpty(),
+    asrModel = voice?.asrModel ?: VoiceRuntimeConfiguration.DEFAULT_ASR_MODEL,
+    ttsModel = voice?.ttsModel ?: VoiceRuntimeConfiguration.DEFAULT_TTS_MODEL,
+    ttsVoice = voice?.ttsVoice ?: VoiceRuntimeConfiguration.DEFAULT_TTS_VOICE,
+    ttsResponseFormat = voice?.ttsResponseFormat ?: VoiceAudioFormat.Pcm,
+    ttsSampleRate = (voice?.ttsSampleRate
+        ?: VoiceRuntimeConfiguration.DEFAULT_TTS_SAMPLE_RATE).toString(),
+    ttsVolume = (voice?.ttsVolume ?: VoiceRuntimeConfiguration.DEFAULT_TTS_VOLUME).toString(),
+    ttsRate = (voice?.ttsRate ?: VoiceRuntimeConfiguration.DEFAULT_TTS_RATE).toString(),
+    ttsPitch = (voice?.ttsPitch ?: VoiceRuntimeConfiguration.DEFAULT_TTS_PITCH).toString(),
+    voiceLanguage = voice?.language ?: VoiceRuntimeConfiguration.DEFAULT_LANGUAGE,
     revision = revision.takeIf { it > 0 },
 )
 

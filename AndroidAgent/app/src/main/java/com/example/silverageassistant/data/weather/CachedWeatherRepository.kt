@@ -8,7 +8,7 @@ import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-const val WEATHER_CACHE_TTL_MINUTES = 60L
+const val WEATHER_CACHE_TTL_MINUTES = 120L
 
 /**
  * 首页和天气 Tool 共享的单进程缓存。

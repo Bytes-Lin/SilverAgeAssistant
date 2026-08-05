@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material3.AlertDialog
@@ -23,6 +24,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -83,6 +85,7 @@ fun FamilySafetyEventsRoute(
         onRefresh = viewModel::refreshCurrentEvents,
         onOpenImage = viewModel::openEventImage,
         onCloseImage = viewModel::closeEventImage,
+        onClearEmergency = viewModel::clearEmergency,
         onBack = onBack,
     )
 }
@@ -200,6 +203,7 @@ private fun FamilySafetyEventsScreen(
     onRefresh: () -> Unit,
     onOpenImage: (SafetyEvent) -> Unit,
     onCloseImage: () -> Unit,
+    onClearEmergency: (SafetyEvent) -> Unit,
     onBack: () -> Unit,
 ) {
     val events = if (emergencyOnly) state.emergencyEvents else state.generalEvents
@@ -245,6 +249,9 @@ private fun FamilySafetyEventsScreen(
                     timeZone = state.timeZone,
                     thumbnailBytes = state.eventThumbnails[event.eventId],
                     onOpenImage = { onOpenImage(event) },
+                    showClearAction = emergencyOnly,
+                    isClearing = event.eventId in state.resolvingEventIds,
+                    onClear = { onClearEmergency(event) },
                 )
             }
             item {
@@ -267,6 +274,9 @@ private fun SafetyEventCard(
     timeZone: String?,
     thumbnailBytes: ByteArray?,
     onOpenImage: () -> Unit,
+    showClearAction: Boolean,
+    isClearing: Boolean,
+    onClear: () -> Unit,
 ) {
     val emergency = event.severity == SafetyEventSeverity.EMERGENCY
     Card(
@@ -324,6 +334,19 @@ private fun SafetyEventCard(
             if (event.acknowledgedAt != null) {
                 Text("家属已确认收到", style = MaterialTheme.typography.bodyMedium)
             }
+            if (showClearAction) {
+                OutlinedButton(
+                    onClick = onClear,
+                    enabled = !isClearing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    androidx.compose.material3.Icon(
+                        imageVector = Icons.Rounded.DeleteOutline,
+                        contentDescription = null,
+                    )
+                    Text(if (isClearing) "正在清除" else "清除")
+                }
+            }
         }
     }
 }
@@ -377,6 +400,7 @@ private fun SafetyEventType.displayName(): String = when (this) {
     SafetyEventType.FALL_SUSPECTED -> "疑似跌倒"
     SafetyEventType.UNCONSCIOUSNESS_SUSPECTED -> "疑似晕倒或失去意识"
     SafetyEventType.OTHER_ABNORMALITY -> "其他异常状态"
+    SafetyEventType.GUI_ORDER_ASSISTANCE_REQUIRED -> "外卖或网购需要协助"
 }
 
 private fun String.toDisplayTime(timeZone: String?): String = runCatching {

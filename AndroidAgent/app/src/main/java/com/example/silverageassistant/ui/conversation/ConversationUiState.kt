@@ -2,6 +2,8 @@ package com.example.silverageassistant.ui.conversation
 
 import com.example.silverageassistant.data.usage.ModelUsagePolicy
 import com.example.silverageassistant.domain.agent.PendingPhoneCall
+import com.example.silverageassistant.domain.voice.VoiceListeningState
+import com.example.silverageassistant.domain.voice.VoiceSpeakingState
 
 enum class ConversationPhase(
     val statusText: String,
@@ -48,12 +50,19 @@ data class ConversationUiState(
     val contextTokens: Long = 0,
     val contextWindowTokens: Long = ModelUsagePolicy.DEFAULT_CONTEXT_WINDOW_TOKENS,
     val pendingPhoneCall: PendingPhoneCall? = null,
+    val voiceEnabled: Boolean = false,
+    val voiceListeningState: VoiceListeningState = VoiceListeningState.IDLE,
+    val voiceSpeakingState: VoiceSpeakingState = VoiceSpeakingState.IDLE,
+    val voiceMessage: String? = null,
 ) {
     val isProcessing: Boolean
         get() = phase != ConversationPhase.Idle
 
     val canSendText: Boolean
         get() = !isProcessing && draft.isNotBlank()
+
+    val canStartVoice: Boolean
+        get() = voiceEnabled && !isProcessing && voiceListeningState == VoiceListeningState.IDLE
 
     val contextUsageFraction: Float
         get() = if (contextWindowTokens <= 0) {

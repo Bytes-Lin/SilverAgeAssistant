@@ -22,4 +22,10 @@ data class ReminderEntity(
     @ColumnInfo(name = "stored_at_epoch_millis") val storedAtEpochMillis: Long,
     val status: String,
     val acknowledged: Boolean,
+    @ColumnInfo(name = "voice_announcement_state", defaultValue = "'NONE'")
+    val voiceAnnouncementState: String = "NONE",
+    @ColumnInfo(name = "voice_announced_at_epoch_millis")
+    val voiceAnnouncedAtEpochMillis: Long? = null,
+    @ColumnInfo(name = "voice_attempt_count", defaultValue = "0")
+    val voiceAttemptCount: Int = 0,
 )

@@ -2,6 +2,8 @@ package com.example.silverageassistant.ui.conversation
 
 import com.example.silverageassistant.domain.agent.AgentChatCoordinator
 import com.example.silverageassistant.domain.agent.AgentToolRegistry
+import com.example.silverageassistant.domain.gui.GuiTaskChatFeedback
+import com.example.silverageassistant.domain.gui.GuiTaskChatFeedbackBus
 import com.example.silverageassistant.domain.model.ChatModelException
 import com.example.silverageassistant.domain.model.ChatModelProvider
 import com.example.silverageassistant.domain.model.ChatRequest
@@ -11,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -106,6 +109,26 @@ class ConversationViewModelTest {
         assertEquals(ConversationInputMode.Handwriting, viewModel.uiState.value.inputMode)
         assertEquals("手写识别文字", viewModel.uiState.value.draft)
         assertTrue(viewModel.uiState.value.canSendText)
+    }
+
+    @Test
+    fun guiTaskTerminalFeedback_isAppendedWithoutAnotherModelRequest() = runBlocking {
+        val bus = GuiTaskChatFeedbackBus()
+        val viewModel = ConversationViewModel(
+            guiTaskChatFeedbackSource = bus,
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        bus.publish(GuiTaskChatFeedback.Completed("todo-success"))
+        bus.publish(
+            GuiTaskChatFeedback.Failed(
+                todoId = "todo-failed",
+                familyNotified = true,
+            ),
+        )
+
+        assertEquals("已完成任务。", viewModel.uiState.value.messages.takeLast(2)[0].text)
+        assertEquals("任务失败，已通知家人。", viewModel.uiState.value.messages.last().text)
     }
 
     private fun viewModel(provider: ChatModelProvider) = ConversationViewModel(

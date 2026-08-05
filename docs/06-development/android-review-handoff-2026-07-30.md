@@ -21,7 +21,7 @@
 | 文字聊天 | 左右气泡、打字/系统手写入口、上下文圆环、失败重试 | 与 Android 功能文档一致；聊天正文仍只在进程内 |
 | Agent Tool | `get_current_time`、`get_weather`、`call_family_contact`、`report_family_situation` | 与当前 TODO 完成项一致 |
 | 长期记忆 | 私有 `files/agent/MEMORY.md`，绑定资料和联系人摘要写入 system prompt | 与首版记忆文档一致 |
-| 天气 | 粗略定位、两级城市解析、Open-Meteo 当前及未来三天、60 分钟共享缓存 | 与首页和天气 Tool 文档一致 |
+| 天气 | 粗略定位、两级城市解析、Open-Meteo 当前及未来三天、2 小时共享缓存 | 与首页和天气 Tool 文档一致 |
 | 提醒 | Room 保存，家属通知/一次性提醒补拉、ACK、完成/稍后样式与排序 | 与当前提醒首版文档一致 |
 | 家属协同 | 通知、提醒、联系人、模型配置、用量、今日状态、紧急事件 | 主要链路已接中台 |
 | 用量 | MLLM 调用全局包装记录、Room 暂存、每小时 WorkManager 上报、手动即时上报 | 与用量文档一致 |
@@ -65,7 +65,7 @@ GUI Agent 不能直接扩展为“模型自由点击”。应先建立任务、�
 
 ### P2：system prompt 描述的能力多于当前注册工具
 
-system prompt 已描述提醒、下单、音乐、打开应用等能力，但当前 Tool Registry 只注册时间、天气、电话和家属报告。虽然模型请求中的 `tools` 列表只包含真实工具，提示词仍可能使模型用自然语言声称可以执行尚未实现的操作。
+system prompt 曾描述提醒、下单、媒体播放、打开应用等能力，但当时 Tool Registry 只注册时间、天气、电话和家属报告。媒体播放能力现已从产品规划移除并由新闻播报替代；新闻 Tool 与 TTS 仍需后续接入。
 
 后续应由 Tool Registry 或 Capability Snapshot 动态生成“当前可用能力”提示，避免静态 prompt 与实现继续漂移。
 
@@ -98,7 +98,7 @@ Lint 为 0 error、9 warning。需要后续关注的业务相关警告是电话 
 - ASR、TTS、录音和语音播放闭环；
 - 跨会话聊天历史、上下文压缩和完整记忆治理；
 - 本地提醒创建/编辑、AlarmManager 到时触发、真正的稍后重调度；
-- 生活助手、音乐、SOS；
+- 生活助手、新闻语音播报、SOS；
 - 通用审批、紧急联系人远程管理；
 - 真实局域网摄像头；
 - GUI Agent、外卖和网购执行；

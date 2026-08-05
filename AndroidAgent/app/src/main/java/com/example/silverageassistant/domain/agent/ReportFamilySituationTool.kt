@@ -26,6 +26,7 @@ class FamilySituationReporter(
     suspend fun report(
         eventType: SafetyEventType,
         eventSummary: String,
+        clientEventId: String = idFactory(),
     ): SafetyEvent {
         val summary = eventSummary.trim()
         require(summary.isNotBlank()) { "event_summary must not be blank" }
@@ -36,11 +37,13 @@ class FamilySituationReporter(
             SafetyEventType.HEALTH_DISCOMFORT_REPORTED,
             SafetyEventType.FALL_SUSPECTED,
             SafetyEventType.UNCONSCIOUSNESS_SUSPECTED,
-            SafetyEventType.OTHER_ABNORMALITY -> SafetyEventSeverity.EMERGENCY
+            SafetyEventType.OTHER_ABNORMALITY,
+            SafetyEventType.GUI_ORDER_ASSISTANCE_REQUIRED,
+            -> SafetyEventSeverity.EMERGENCY
         }
         return repository.createSafetyEvent(
             ElderSafetyEventRequest(
-                clientEventId = idFactory(),
+                clientEventId = clientEventId,
                 occurredAt = Instant.now(clock).toString(),
                 eventType = eventType,
                 eventSummary = summary,
@@ -67,6 +70,7 @@ class FamilySituationReporter(
             SafetyEventType.FALL_SUSPECTED,
             SafetyEventType.UNCONSCIOUSNESS_SUSPECTED,
             SafetyEventType.OTHER_ABNORMALITY,
+            SafetyEventType.GUI_ORDER_ASSISTANCE_REQUIRED,
         )
     }
 }
@@ -76,7 +80,9 @@ class ReportFamilySituationTool(
 ) : AgentTool {
     override val definition = ChatToolDefinition(
         name = NAME,
-        description = "向已绑定家属上报老人当前情况。老人说今天身体不舒服时上报紧急事件；明确说想让家人回家吃饭等家庭请求时上报一般事件。普通闲聊、过去的身体情况、假设问题和他人的情况不要调用。时间由手机自动生成。",
+        description = "向已绑定的家属上报老人当前情况。当老人说今天身体不舒服等身体情况差相关的事情上报为紧急事件；" +
+                "当老人说想让家人回家吃饭等常见家庭请求时上报一般事件。" +
+                "普通闲聊、过去的身体情况、假设问题和他人的情况不要调用。时间由手机自动生成。",
         parametersJson = """
             {
               "type": "object",
@@ -117,6 +123,9 @@ class ReportFamilySituationTool(
         val eventType = SafetyEventType.valueOf(
             arguments.getValue("event_type").jsonPrimitive.content,
         )
+        require(eventType != SafetyEventType.GUI_ORDER_ASSISTANCE_REQUIRED) {
+            "GUI failure events can only be created by the deterministic GUI task manager"
+        }
         val summary = arguments.getValue("event_summary").jsonPrimitive.content
         SafetyEventSeverity.valueOf(
             arguments.getValue("severity").jsonPrimitive.content,

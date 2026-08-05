@@ -8,6 +8,12 @@ import com.example.silverageassistant.data.middleserver.MiddleServerRequestExcep
 import com.example.silverageassistant.data.reminders.ReminderRepository
 import com.example.silverageassistant.data.reminders.StoredReminder
 import com.example.silverageassistant.data.reminders.StoredReminderStatus
+import com.example.silverageassistant.data.reminders.VoiceAnnouncementState
+import com.example.silverageassistant.data.middleserver.RemoteCommand
+import com.example.silverageassistant.domain.voice.VoiceFeature
+import com.example.silverageassistant.domain.voice.VoiceInteractionCoordinator
+import com.example.silverageassistant.domain.voice.VoicePriority
+import com.example.silverageassistant.domain.voice.VoiceRequestContext
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.ZoneId
@@ -48,6 +54,7 @@ data class ReminderSyncState(
 class ReminderViewModel(
     private val reminderRepository: ReminderRepository? = null,
     private val commandRepository: ElderCommandRepository? = null,
+    private val voiceCoordinator: VoiceInteractionCoordinator? = null,
     externalScope: CoroutineScope? = null,
 ) : ViewModel() {
     private val workScope = externalScope ?: viewModelScope
@@ -56,12 +63,23 @@ class ReminderViewModel(
     private val _syncState = MutableStateFlow(ReminderSyncState())
     val syncState: StateFlow<ReminderSyncState> = _syncState.asStateFlow()
     private var syncJob: Job? = null
+    private var recoveredVoiceAnnouncements = false
 
     init {
         if (reminderRepository != null) {
             workScope.launch {
                 reminderRepository.reminders.collectLatest { stored ->
                     _reminders.value = stored.map { reminder -> reminder.toUi() }.sortedForToday()
+                }
+            }
+        }
+        if (reminderRepository != null && voiceCoordinator != null) {
+            workScope.launch {
+                voiceCoordinator.enabled.collect { enabled ->
+                    if (enabled && !recoveredVoiceAnnouncements) {
+                        recoveredVoiceAnnouncements = true
+                        recoverVoiceAnnouncements(reminderRepository)
+                    }
                 }
             }
         }
@@ -85,7 +103,18 @@ class ReminderViewModel(
                     val requestedAfterSequence = afterSequence
                     val page = remoteRepository.getPendingCommands(afterSequence)
                     page.commands.forEach { command ->
-                        localRepository.saveRemoteCommand(command)
+                        val saveResult = localRepository.saveRemoteCommandWithResult(
+                            command = command,
+                            voiceAnnouncementEnabled = voiceCoordinator?.enabled?.value == true,
+                        )
+                        if (saveResult.voiceAnnouncementPending) {
+                            announceFamilyNotification(
+                                reminderId = command.commandId,
+                                sourceDisplayName = command.senderDisplayName,
+                                content = command.content,
+                                localRepository = localRepository,
+                            )
+                        }
                         acknowledgeStoredCommand(
                             commandId = command.commandId,
                             storedAt = Instant.now(),
@@ -106,6 +135,56 @@ class ReminderViewModel(
                 _syncState.value = ReminderSyncState(
                     message = "暂时无法同步家人消息，已保存的提醒仍可使用。",
                     isError = true,
+                )
+            }
+        }
+    }
+
+    private fun announceFamilyNotification(
+        reminderId: String,
+        sourceDisplayName: String?,
+        content: String,
+        localRepository: ReminderRepository,
+    ) {
+        val voice = voiceCoordinator ?: return
+        workScope.launch {
+            val source = sourceDisplayName?.trim().orEmpty().ifBlank { "家人" }
+            val speakableContent = content
+                .replace(Regex("https?://\\S+"), "链接")
+                .trim()
+                .take(800)
+            val result = runCatching {
+                voice.stopSpeaking()
+                voice.speakNow(
+                    VoiceRequestContext(
+                        feature = VoiceFeature.FAMILY_NOTIFICATION,
+                        correlationId = reminderId,
+                        priority = VoicePriority.FAMILY_NOTIFICATION,
+                    ),
+                    "您收到一条来自${source}的通知。$speakableContent",
+                )
+            }
+            localRepository.markVoiceAnnouncement(
+                reminderId,
+                if (result.isSuccess) VoiceAnnouncementState.SPOKEN else VoiceAnnouncementState.FAILED,
+            )
+        }
+    }
+
+    private suspend fun recoverVoiceAnnouncements(localRepository: ReminderRepository) {
+        val cutoff = System.currentTimeMillis() - VOICE_RECOVERY_WINDOW_MILLIS
+        localRepository.pendingVoiceAnnouncements().forEach { pending ->
+            if (pending.storedAtEpochMillis < cutoff) {
+                localRepository.markVoiceAnnouncement(
+                    pending.reminderId,
+                    VoiceAnnouncementState.EXPIRED,
+                )
+            } else {
+                announceFamilyNotification(
+                    reminderId = pending.reminderId,
+                    sourceDisplayName = pending.sourceDisplayName,
+                    content = pending.content,
+                    localRepository = localRepository,
                 )
             }
         }
@@ -193,11 +272,16 @@ class ReminderViewModel(
     class Factory(
         private val reminderRepository: ReminderRepository,
         private val commandRepository: ElderCommandRepository?,
+        private val voiceCoordinator: VoiceInteractionCoordinator? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(ReminderViewModel::class.java))
-            return ReminderViewModel(reminderRepository, commandRepository) as T
+            return ReminderViewModel(
+                reminderRepository,
+                commandRepository,
+                voiceCoordinator,
+            ) as T
         }
     }
 
@@ -213,5 +297,6 @@ class ReminderViewModel(
                 "准备好就诊卡和随身物品。",
             ),
         )
+        const val VOICE_RECOVERY_WINDOW_MILLIS = 10 * 60 * 1_000L
     }
 }

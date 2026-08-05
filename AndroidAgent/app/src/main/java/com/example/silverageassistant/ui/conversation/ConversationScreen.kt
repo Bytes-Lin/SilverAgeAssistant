@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -40,7 +41,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -58,10 +61,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
+import com.example.silverageassistant.domain.voice.VoiceListeningState
+import com.example.silverageassistant.domain.voice.VoiceSpeakingState
 import com.example.silverageassistant.ui.components.ElderScreenScaffold
 import com.example.silverageassistant.ui.components.LargeActionButton
 import com.example.silverageassistant.ui.theme.ElderSpacing
@@ -84,6 +90,14 @@ fun ConversationRoute(
     ) { granted ->
         viewModel.confirmPendingPhoneCall(direct = granted)
     }
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        viewModel.onMicrophonePermissionResult(granted)
+    }
+    DisposableEffect(viewModel) {
+        onDispose { viewModel.onPageClosed() }
+    }
     ConversationScreen(
         uiState = uiState,
         onDraftChange = viewModel::updateDraft,
@@ -91,6 +105,19 @@ fun ConversationRoute(
         onSendText = viewModel::sendTextMessage,
         onCancel = viewModel::cancelResponse,
         onRetry = viewModel::retryLastMessage,
+        onStartVoice = {
+            if (
+                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                viewModel.startVoiceRecording()
+            } else {
+                microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        },
+        onStopVoice = viewModel::stopVoiceRecording,
+        onCancelVoice = viewModel::cancelVoiceRecording,
+        onStopVoicePlayback = viewModel::stopVoicePlayback,
         onDismissPhoneCall = viewModel::dismissPendingPhoneCall,
         onConfirmPhoneCall = {
             if (
@@ -114,6 +141,10 @@ fun ConversationScreen(
     onSendText: () -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
+    onStartVoice: () -> Unit = {},
+    onStopVoice: () -> Unit = {},
+    onCancelVoice: () -> Unit = {},
+    onStopVoicePlayback: () -> Unit = {},
     onDismissPhoneCall: () -> Unit = {},
     onConfirmPhoneCall: () -> Unit = {},
     onBack: () -> Unit,
@@ -159,6 +190,10 @@ fun ConversationScreen(
                 uiState = uiState,
                 onCancel = onCancel,
                 onRetry = onRetry,
+                onStartVoice = onStartVoice,
+                onStopVoice = onStopVoice,
+                onCancelVoice = onCancelVoice,
+                onStopVoicePlayback = onStopVoicePlayback,
             )
         }
     }
@@ -429,6 +464,10 @@ private fun VoiceActions(
     uiState: ConversationUiState,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
+    onStartVoice: () -> Unit,
+    onStopVoice: () -> Unit,
+    onCancelVoice: () -> Unit,
+    onStopVoicePlayback: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -459,12 +498,36 @@ private fun VoiceActions(
             }
             Spacer(modifier = Modifier.height(ElderSpacing.small))
         }
-        LargeActionButton(
-            text = "语音功能稍后接入",
-            icon = Icons.Rounded.Mic,
-            enabled = false,
-            onClick = {},
-        )
+        uiState.voiceMessage?.let { message ->
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = ElderSpacing.small),
+            )
+        }
+        if (uiState.voiceEnabled) {
+            HoldToTalkButton(
+                listeningState = uiState.voiceListeningState,
+                enabled = uiState.canStartVoice ||
+                    uiState.voiceListeningState != VoiceListeningState.IDLE,
+                onStart = onStartVoice,
+                onStop = onStopVoice,
+                onCancel = onCancelVoice,
+            )
+            if (uiState.voiceSpeakingState == VoiceSpeakingState.SPEAKING) {
+                TextButton(onClick = onStopVoicePlayback) {
+                    Text("停止播报")
+                }
+            }
+        } else {
+            LargeActionButton(
+                text = "语音交互已关闭",
+                icon = Icons.Rounded.Mic,
+                enabled = false,
+                onClick = {},
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
@@ -481,6 +544,52 @@ private fun VoiceActions(
                     Text("停止回答")
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HoldToTalkButton(
+    listeningState: VoiceListeningState,
+    enabled: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val label = when (listeningState) {
+        VoiceListeningState.IDLE -> "按住说话"
+        VoiceListeningState.LISTENING -> "正在听，松开发送"
+        VoiceListeningState.PROCESSING -> "正在识别"
+    }
+    Surface(
+        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = RoundedCornerShape(32.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .semantics { contentDescription = label }
+            // 录音启动会依次经过 PROCESSING 和 LISTENING。这里不能把状态作为
+            // pointerInput 的 key，否则重组会在手指仍按下时取消手势，ACTION_UP 丢失。
+            .pointerInput(enabled) {
+                if (enabled) {
+                    detectTapGestures(
+                        onPress = {
+                            onStart()
+                            if (tryAwaitRelease()) onStop() else onCancel()
+                        },
+                    )
+                }
+            },
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Icon(Icons.Rounded.Mic, contentDescription = null)
+            Spacer(Modifier.size(10.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge)
         }
     }
 }

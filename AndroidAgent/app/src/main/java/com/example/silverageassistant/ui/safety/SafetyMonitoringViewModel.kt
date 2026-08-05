@@ -37,6 +37,7 @@ data class SafetyMonitoringUiState(
     val openedImageBytes: ByteArray? = null,
     val isLoadingOpenedImage: Boolean = false,
     val locallyDismissedEmergencyIds: Set<String> = emptySet(),
+    val resolvingEventIds: Set<String> = emptySet(),
 ) {
     val generalEvents: List<SafetyEvent>
         get() = events.filter { it.severity == SafetyEventSeverity.GENERAL }
@@ -249,6 +250,61 @@ class SafetyMonitoringViewModel(
         }
     }
 
+    fun clearEmergency(event: SafetyEvent) {
+        if (event.severity != SafetyEventSeverity.EMERGENCY) return
+        val elderId = currentElderId ?: run {
+            _uiState.update { it.copy(eventsMessage = "请先完成老人设备绑定。") }
+            return
+        }
+        val repository = familyRepository ?: run {
+            _uiState.update { it.copy(eventsMessage = "中台事件清除接口尚未接入。") }
+            return
+        }
+        if (event.eventId in _uiState.value.resolvingEventIds) return
+
+        _uiState.update {
+            it.copy(
+                resolvingEventIds = it.resolvingEventIds + event.eventId,
+                eventsMessage = null,
+            )
+        }
+        workScope.launch {
+            try {
+                repository.resolveSafetyEvent(
+                    elderId = elderId,
+                    eventId = event.eventId,
+                    clientRequestId = UUID.randomUUID().toString(),
+                )
+                _uiState.update { state ->
+                    state.copy(
+                        events = state.events.filterNot { it.eventId == event.eventId },
+                        eventThumbnails = state.eventThumbnails - event.eventId,
+                        locallyDismissedEmergencyIds =
+                            state.locallyDismissedEmergencyIds + event.eventId,
+                        resolvingEventIds = state.resolvingEventIds - event.eventId,
+                        openedImageEventId = state.openedImageEventId
+                            ?.takeUnless { it == event.eventId },
+                        openedImageBytes = if (state.openedImageEventId == event.eventId) {
+                            null
+                        } else {
+                            state.openedImageBytes
+                        },
+                        isLoadingOpenedImage = if (state.openedImageEventId == event.eventId) {
+                            false
+                        } else {
+                            state.isLoadingOpenedImage
+                        },
+                        eventsMessage = "已清除这条紧急事件。",
+                    )
+                }
+            } catch (error: MiddleServerRequestException) {
+                clearEmergencyFailure(event.eventId, error.userMessage)
+            } catch (_: Exception) {
+                clearEmergencyFailure(event.eventId, "清除失败，请稍后再试。")
+            }
+        }
+    }
+
     fun syncElderConfiguration() {
         val repository = elderRepository ?: return
         elderSyncPending = true
@@ -312,6 +368,15 @@ class SafetyMonitoringViewModel(
 
     private fun eventsFailure(message: String) {
         _uiState.update { it.copy(isLoadingEvents = false, eventsMessage = message) }
+    }
+
+    private fun clearEmergencyFailure(eventId: String, message: String) {
+        _uiState.update {
+            it.copy(
+                resolvingEventIds = it.resolvingEventIds - eventId,
+                eventsMessage = message,
+            )
+        }
     }
 
     class Factory(

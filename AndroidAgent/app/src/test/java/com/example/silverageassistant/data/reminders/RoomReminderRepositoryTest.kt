@@ -65,5 +65,26 @@ class RoomReminderRepositoryTest {
                 if (it.id == id) it.copy(status = status) else it
             }
         }
+
+        override suspend fun updateVoiceAnnouncement(
+            id: String,
+            state: String,
+            announcedAt: Long?,
+        ) {
+            entities.value = entities.value.map {
+                if (it.id == id) {
+                    it.copy(
+                        voiceAnnouncementState = state,
+                        voiceAnnouncedAtEpochMillis = announcedAt,
+                        voiceAttemptCount = it.voiceAttemptCount + 1,
+                    )
+                } else {
+                    it
+                }
+            }
+        }
+
+        override suspend fun pendingVoiceAnnouncements(): List<ReminderEntity> =
+            entities.value.filter { it.voiceAnnouncementState == "PENDING" }
     }
 }

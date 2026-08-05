@@ -12,7 +12,12 @@ import com.example.silverageassistant.domain.model.ReasoningMode
 import com.example.silverageassistant.domain.model.SamplingConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 data class AgentChatOptions(
@@ -48,19 +53,38 @@ class AgentChatCoordinator(
     private val systemPromptProvider: SystemPromptProvider = DefaultSystemPromptProvider(),
     private val options: AgentChatOptions = AgentChatOptions(),
     private val optionsProvider: AgentChatOptionsProvider? = null,
+    private val deterministicToolRouter: AgentDeterministicToolRouter? = null,
 ) {
     fun streamTurn(
         history: List<ChatMessage>,
         userText: String,
     ): Flow<AgentChatEvent> = flow {
         require(userText.isNotBlank()) { "userText must not be blank" }
+        val currentOptions = optionsProvider?.options() ?: options
+        emit(AgentChatEvent.Started(currentOptions.contextWindowTokens))
+
+        deterministicToolRouter?.route(userText)?.let { route ->
+            val tool = toolRegistry.find(route.toolName)
+            emit(
+                AgentChatEvent.ToolRunning(
+                    displayName = tool?.runningDisplayName ?: "正在使用功能",
+                ),
+            )
+            val result = executeRegisteredTool(tool, route.argumentsJson)
+            emit(
+                AgentChatEvent.TextDelta(
+                    deterministicToolResponse(route, result),
+                ),
+            )
+            emit(AgentChatEvent.Completed)
+            return@flow
+        }
+
         val messages = buildList {
             add(ChatMessage(ChatRole.System, systemPromptProvider.systemPrompt()))
             addAll(history)
             add(ChatMessage(ChatRole.User, userText))
         }.toMutableList()
-        val currentOptions = optionsProvider?.options() ?: options
-        emit(AgentChatEvent.Started(currentOptions.contextWindowTokens))
 
         // 限制“模型 -> 工具 -> 模型”的递归轮数，避免错误模型不断调用工具耗尽 Token。
         repeat(MAX_MODEL_ROUNDS) {
@@ -114,15 +138,7 @@ class AgentChatCoordinator(
                         displayName = tool?.runningDisplayName ?: "正在使用功能",
                     ),
                 )
-                val result = when {
-                    tool == null -> toolError("未找到这个功能")
-                    tool.riskLevel != ToolRiskLevel.Low &&
-                        tool.executionPolicy == ToolExecutionPolicy.Immediate -> {
-                        toolError("这个功能需要进一步确认")
-                    }
-                    else -> runCatching { tool.execute(call.argumentsJson) }
-                        .getOrElse { toolError("功能参数不正确") }
-                }
+                val result = executeRegisteredTool(tool, call.argumentsJson)
                 messages += ChatMessage(
                     role = ChatRole.Tool,
                     content = result,
@@ -141,6 +157,37 @@ class AgentChatCoordinator(
         put("ok", false)
         put("error", message)
     }.toString()
+
+    private suspend fun executeRegisteredTool(
+        tool: AgentTool?,
+        argumentsJson: String,
+    ): String = when {
+        tool == null -> toolError("未找到这个功能")
+        tool.riskLevel != ToolRiskLevel.Low &&
+            tool.executionPolicy == ToolExecutionPolicy.Immediate -> {
+            toolError("这个功能需要进一步确认")
+        }
+        else -> runCatching { tool.execute(argumentsJson) }
+            .getOrElse { toolError("功能参数不正确") }
+    }
+
+    private fun deterministicToolResponse(
+        route: AgentDeterministicToolRoute,
+        result: String,
+    ): String {
+        val resultObject = runCatching {
+            Json.parseToJsonElement(result).jsonObject
+        }.getOrNull()
+        if (resultObject?.get("ok")?.jsonPrimitive?.booleanOrNull == true) {
+            return route.acceptedResponse
+        }
+        return resultObject
+            ?.get("message")
+            ?.jsonPrimitive
+            ?.contentOrNull
+            ?.takeIf(String::isNotBlank)
+            ?: route.rejectedResponse
+    }
 
     private companion object {
         const val MAX_MODEL_ROUNDS = 3

@@ -34,6 +34,9 @@ class ModelConfigurationViewModelTest {
         viewModel.updateTemperature("0.7")
         viewModel.updateTopP("0.85")
         viewModel.updateTopK("30")
+        viewModel.updateVoiceWebSocketUrl(
+            "wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference/",
+        )
 
         assertTrue(viewModel.saveForFamily("elder-1"))
 
@@ -43,6 +46,16 @@ class ModelConfigurationViewModelTest {
         assertEquals(65536, request.configuration.contextWindowTokens)
         assertEquals(768, request.configuration.maxOutputTokens)
         assertEquals(0.7, request.configuration.temperature, 0.0)
+        assertEquals(
+            "wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+            request.configuration.voice?.webSocketUrl,
+        )
+        assertEquals(
+            "qwen-audio-3.0-asr-flash-streaming",
+            request.configuration.voice?.asrModel,
+        )
+        assertEquals("qwen-audio-3.0-tts-flash", request.configuration.voice?.ttsModel)
+        assertEquals("longanfengyue", request.configuration.voice?.ttsVoice)
         assertEquals(4L, viewModel.uiState.value.revision)
         assertEquals("配置已交给中台，老人端联网后会自动使用。", viewModel.uiState.value.resultMessage)
     }
@@ -86,6 +99,26 @@ class ModelConfigurationViewModelTest {
         viewModel.syncElderConfiguration()
 
         assertEquals(remote, store.configuration.value)
+    }
+
+    @Test
+    fun invalidVoiceWebSocketUrl_isRejectedBeforeNetworkRequest() {
+        val repository = FakeFamilyRepository(savedResult = configuration())
+        val viewModel = ModelConfigurationViewModel(
+            store = InMemoryModelConfigurationStore(configuration()),
+            familyRepository = repository,
+            allowCleartextHttp = true,
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+        )
+        viewModel.updateVoiceWebSocketUrl("ws://example.com/api-ws/v1/inference")
+
+        assertFalse(viewModel.saveForFamily("elder-1"))
+
+        assertNull(repository.lastRequest)
+        assertEquals(
+            "语音服务地址必须是安全的 wss:// 地址，且不能包含账号、查询参数或页面片段",
+            viewModel.uiState.value.fieldError,
+        )
     }
 
     private fun configuration() = ModelRuntimeConfiguration(

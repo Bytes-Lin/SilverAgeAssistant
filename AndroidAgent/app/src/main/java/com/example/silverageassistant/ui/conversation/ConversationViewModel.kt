@@ -7,9 +7,15 @@ import com.example.silverageassistant.domain.agent.AgentChatCoordinator
 import com.example.silverageassistant.domain.agent.AgentChatEvent
 import com.example.silverageassistant.domain.agent.PendingPhoneCallCoordinator
 import com.example.silverageassistant.domain.agent.PhoneCallLauncher
+import com.example.silverageassistant.domain.gui.GuiTaskChatFeedback
+import com.example.silverageassistant.domain.gui.GuiTaskChatFeedbackSource
 import com.example.silverageassistant.domain.model.ChatMessage
 import com.example.silverageassistant.domain.model.ChatModelException
 import com.example.silverageassistant.domain.model.ChatRole
+import com.example.silverageassistant.domain.voice.VoiceFeature
+import com.example.silverageassistant.domain.voice.VoiceInteractionCoordinator
+import com.example.silverageassistant.domain.voice.VoicePriority
+import com.example.silverageassistant.domain.voice.VoiceRequestContext
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +37,8 @@ class ConversationViewModel(
     private val coordinator: AgentChatCoordinator? = null,
     private val pendingPhoneCallCoordinator: PendingPhoneCallCoordinator? = null,
     private val phoneCallLauncher: PhoneCallLauncher? = null,
+    private val guiTaskChatFeedbackSource: GuiTaskChatFeedbackSource? = null,
+    private val voiceCoordinator: VoiceInteractionCoordinator? = null,
     externalScope: CoroutineScope? = null,
 ) : ViewModel() {
     private val workScope = externalScope ?: viewModelScope
@@ -38,13 +46,47 @@ class ConversationViewModel(
     val uiState: StateFlow<ConversationUiState> = _uiState.asStateFlow()
 
     private var responseJob: Job? = null
+    private var voiceStartJob: Job? = null
+    private var voiceCompletionJob: Job? = null
+    private var voicePressActive = false
     private var pendingRequest: PendingRequest? = null
+    private val announcedGuiTaskIds = mutableSetOf<String>()
 
     init {
         pendingPhoneCallCoordinator?.let { callCoordinator ->
             workScope.launch {
                 callCoordinator.pending.collectLatest { pendingCall ->
                     _uiState.update { it.copy(pendingPhoneCall = pendingCall) }
+                }
+            }
+        }
+        guiTaskChatFeedbackSource?.let { source ->
+            workScope.launch {
+                source.feedback.collect { feedback ->
+                    appendGuiTaskFeedback(feedback)
+                }
+            }
+        }
+        voiceCoordinator?.let { voice ->
+            workScope.launch {
+                voice.enabled.collect { enabled ->
+                    _uiState.update { it.copy(voiceEnabled = enabled) }
+                    if (!enabled) voice.stopAll()
+                }
+            }
+            workScope.launch {
+                voice.listeningState.collect { listening ->
+                    _uiState.update { it.copy(voiceListeningState = listening) }
+                }
+            }
+            workScope.launch {
+                voice.speakingState.collect { speaking ->
+                    _uiState.update { it.copy(voiceSpeakingState = speaking) }
+                }
+            }
+            workScope.launch {
+                voice.error.collect { message ->
+                    if (message != null) _uiState.update { it.copy(voiceMessage = message) }
                 }
             }
         }
@@ -74,6 +116,110 @@ class ConversationViewModel(
         )
         pendingRequest = request
         startRequest(request, appendUserMessage = true)
+    }
+
+    fun startVoiceRecording() {
+        val voice = voiceCoordinator ?: return
+        if (!_uiState.value.canStartVoice || voicePressActive || voiceStartJob?.isActive == true) return
+        voicePressActive = true
+        val correlationId = newMessageId("voice")
+        _uiState.update { it.copy(voiceMessage = "正在准备麦克风…", errorMessage = null) }
+        voiceStartJob = workScope.launch {
+            runCatching { voice.startConversationRecording(correlationId) }
+                .onSuccess {
+                    if (voicePressActive) {
+                        _uiState.update { it.copy(voiceMessage = "正在听，请继续按住说话") }
+                    }
+                }
+                .onFailure { error ->
+                    voicePressActive = false
+                    if (error is CancellationException) return@onFailure
+                    _uiState.update {
+                        it.copy(voiceMessage = error.toVoiceUserMessage("无法开始语音识别，请继续打字。"))
+                    }
+                }
+        }
+    }
+
+    fun stopVoiceRecording() {
+        val voice = voiceCoordinator ?: return
+        if (!voicePressActive) return
+        voicePressActive = false
+        val pendingStart = voiceStartJob
+        voiceCompletionJob?.cancel()
+        voiceCompletionJob = workScope.launch {
+            // 松手可能早于 WebSocket task-started。先等待启动协程结束，再停止录音，
+            // 避免把仍在准备中的停止请求误判为“当前没有录音”。
+            pendingStart?.join()
+            if (voice.listeningState.value == com.example.silverageassistant.domain.voice.VoiceListeningState.IDLE) {
+                return@launch
+            }
+            _uiState.update { it.copy(voiceMessage = "正在识别…") }
+            runCatching { voice.stopConversationRecording() }
+                .onSuccess { result ->
+                    val transcript = result.transcript.trim().take(MAX_DRAFT_LENGTH)
+                    if (transcript.isBlank()) {
+                        _uiState.update { it.copy(voiceMessage = "没有听清，请按住按钮再说一次。") }
+                    } else {
+                        _uiState.update { it.copy(voiceMessage = null) }
+                        submitUserText(transcript)
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) return@onFailure
+                    _uiState.update {
+                        it.copy(voiceMessage = error.toVoiceUserMessage("语音识别失败，请再试一次或继续打字。"))
+                    }
+                }
+        }
+    }
+
+    fun cancelVoiceRecording() {
+        val voice = voiceCoordinator ?: return
+        if (
+            !voicePressActive &&
+            voiceStartJob?.isActive != true &&
+            voice.listeningState.value == com.example.silverageassistant.domain.voice.VoiceListeningState.IDLE
+        ) {
+            return
+        }
+        cancelVoiceRecording(showMessage = true)
+    }
+
+    fun onMicrophonePermissionResult(granted: Boolean) {
+        _uiState.update {
+            it.copy(
+                voiceMessage = if (granted) {
+                    "麦克风权限已允许，请再次按住说话。"
+                } else {
+                    "没有麦克风权限，您仍可以打字聊天。"
+                },
+            )
+        }
+    }
+
+    fun onPageClosed() {
+        cancelVoiceRecording(showMessage = false)
+        stopVoicePlayback()
+    }
+
+    private fun cancelVoiceRecording(showMessage: Boolean) {
+        voicePressActive = false
+        voiceStartJob?.cancel()
+        voiceStartJob = null
+        voiceCompletionJob?.cancel()
+        voiceCompletionJob = workScope.launch {
+            voiceCoordinator?.cancelConversationRecording()
+            if (showMessage) {
+                _uiState.update { it.copy(voiceMessage = "已取消录音。") }
+            } else {
+                _uiState.update { it.copy(voiceMessage = null) }
+            }
+        }
+    }
+
+    fun stopVoicePlayback() {
+        workScope.launch { voiceCoordinator?.stopSpeaking() }
     }
 
     fun retryLastMessage() {
@@ -212,6 +358,18 @@ class ConversationViewModel(
         }
     }
 
+    private fun submitUserText(text: String) {
+        val state = _uiState.value
+        if (state.isProcessing) return
+        val request = PendingRequest(
+            history = state.messages.toModelHistory(),
+            userText = text,
+            userMessageId = newMessageId("elder"),
+        )
+        pendingRequest = request
+        startRequest(request, appendUserMessage = true)
+    }
+
     private fun updatePhase(phase: ConversationPhase) {
         _uiState.update { state ->
             if (state.phase == ConversationPhase.Responding) state else state.copy(phase = phase)
@@ -235,6 +393,7 @@ class ConversationViewModel(
     }
 
     private fun completeAssistantMessage(messageId: String) {
+        var completedText: String? = null
         _uiState.update { state ->
             val target = state.messages.firstOrNull { it.id == messageId }
             if (target == null || target.text.isBlank()) {
@@ -245,6 +404,7 @@ class ConversationViewModel(
                     canRetry = true,
                 )
             } else {
+                completedText = target.text
                 state.copy(
                     phase = ConversationPhase.Idle,
                     messages = state.messages.map { message ->
@@ -258,6 +418,16 @@ class ConversationViewModel(
                     canRetry = false,
                 )
             }
+        }
+        completedText?.toSpeakableText()?.takeIf(String::isNotBlank)?.let { text ->
+            voiceCoordinator?.speak(
+                VoiceRequestContext(
+                    feature = VoiceFeature.CONVERSATION,
+                    correlationId = messageId,
+                    priority = VoicePriority.CONVERSATION,
+                ),
+                text,
+            )
         }
         responseJob = null
     }
@@ -278,6 +448,27 @@ class ConversationViewModel(
             )
         }
         responseJob = null
+    }
+
+    private fun appendGuiTaskFeedback(feedback: GuiTaskChatFeedback) {
+        if (!announcedGuiTaskIds.add(feedback.todoId)) return
+        val text = when (feedback) {
+            is GuiTaskChatFeedback.Completed -> "已完成任务。"
+            is GuiTaskChatFeedback.Failed -> if (feedback.familyNotified) {
+                "任务失败，已通知家人。"
+            } else {
+                "任务失败，请稍后再试。"
+            }
+        }
+        _uiState.update { state ->
+            state.copy(
+                messages = state.messages + ConversationMessage(
+                    id = newMessageId("gui-result"),
+                    speaker = ConversationSpeaker.Assistant,
+                    text = text,
+                ),
+            )
+        }
     }
 
     private fun List<ConversationMessage>.toModelHistory(): List<ChatMessage> = mapNotNull {
@@ -301,6 +492,8 @@ class ConversationViewModel(
         private val coordinator: AgentChatCoordinator?,
         private val pendingPhoneCallCoordinator: PendingPhoneCallCoordinator? = null,
         private val phoneCallLauncher: PhoneCallLauncher? = null,
+        private val guiTaskChatFeedbackSource: GuiTaskChatFeedbackSource? = null,
+        private val voiceCoordinator: VoiceInteractionCoordinator? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -309,6 +502,8 @@ class ConversationViewModel(
                 coordinator = coordinator,
                 pendingPhoneCallCoordinator = pendingPhoneCallCoordinator,
                 phoneCallLauncher = phoneCallLauncher,
+                guiTaskChatFeedbackSource = guiTaskChatFeedbackSource,
+                voiceCoordinator = voiceCoordinator,
             ) as T
         }
     }
@@ -322,4 +517,21 @@ class ConversationViewModel(
     private companion object {
         const val MAX_DRAFT_LENGTH = 500
     }
+}
+
+private fun String.toSpeakableText(): String = replace(Regex("```[\\s\\S]*?```"), "")
+    .replace(Regex("https?://\\S+"), "")
+    .replace(Regex("[*_#>`~]+"), "")
+    .trim()
+
+/** 只允许明确、适合老人的配置提示进入 UI，网络栈和协程内部消息一律隐藏。 */
+private fun Throwable.toVoiceUserMessage(fallback: String): String = when (message) {
+    "家属尚未配置语音模型",
+    "请先在老人端设置语音 API Key",
+    "请允许银龄助手使用麦克风",
+    "当前无法使用麦克风，请稍后再试",
+    "麦克风暂时不可用",
+    "麦克风初始化失败",
+    -> message.orEmpty()
+    else -> fallback
 }

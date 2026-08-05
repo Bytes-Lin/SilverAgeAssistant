@@ -29,6 +29,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import com.example.silverageassistant.data.model.OpenAiCompatibleDialect
+import com.example.silverageassistant.data.model.VoiceAudioFormat
 import com.example.silverageassistant.ui.components.ElderScreenScaffold
 import com.example.silverageassistant.ui.components.LargeActionButton
 import com.example.silverageassistant.ui.theme.ElderSpacing
@@ -54,6 +55,16 @@ fun ModelConfigurationRoute(
         onTemperatureChanged = viewModel::updateTemperature,
         onTopPChanged = viewModel::updateTopP,
         onTopKChanged = viewModel::updateTopK,
+        onVoiceWebSocketUrlChanged = viewModel::updateVoiceWebSocketUrl,
+        onAsrModelChanged = viewModel::updateAsrModel,
+        onTtsModelChanged = viewModel::updateTtsModel,
+        onTtsVoiceChanged = viewModel::updateTtsVoice,
+        onTtsResponseFormatChanged = viewModel::updateTtsResponseFormat,
+        onTtsSampleRateChanged = viewModel::updateTtsSampleRate,
+        onTtsVolumeChanged = viewModel::updateTtsVolume,
+        onTtsRateChanged = viewModel::updateTtsRate,
+        onTtsPitchChanged = viewModel::updateTtsPitch,
+        onVoiceLanguageChanged = viewModel::updateVoiceLanguage,
         onSave = { viewModel.saveForFamily(elderId) },
     )
 }
@@ -70,6 +81,16 @@ fun ModelConfigurationScreen(
     onTemperatureChanged: (String) -> Unit,
     onTopPChanged: (String) -> Unit,
     onTopKChanged: (String) -> Unit,
+    onVoiceWebSocketUrlChanged: (String) -> Unit,
+    onAsrModelChanged: (String) -> Unit,
+    onTtsModelChanged: (String) -> Unit,
+    onTtsVoiceChanged: (String) -> Unit,
+    onTtsResponseFormatChanged: (VoiceAudioFormat) -> Unit,
+    onTtsSampleRateChanged: (String) -> Unit,
+    onTtsVolumeChanged: (String) -> Unit,
+    onTtsRateChanged: (String) -> Unit,
+    onTtsPitchChanged: (String) -> Unit,
+    onVoiceLanguageChanged: (String) -> Unit,
     onSave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -178,6 +199,116 @@ fun ModelConfigurationScreen(
                 )
             }
             item {
+                Text("语音模型", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "ASR 和 TTS 共用这个百炼 WebSocket 地址。地址留空时只下发文字模型配置。",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = state.voiceWebSocketUrl,
+                    onValueChange = onVoiceWebSocketUrlChanged,
+                    label = { Text("语音服务 WebSocket 地址") },
+                    supportingText = {
+                        Text("wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference")
+                    },
+                    singleLine = true,
+                    enabled = !state.isSaving,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = state.asrModel,
+                    onValueChange = onAsrModelChanged,
+                    label = { Text("ASR 模型名称") },
+                    singleLine = true,
+                    enabled = !state.isSaving,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = state.ttsModel,
+                    onValueChange = onTtsModelChanged,
+                    label = { Text("TTS 模型名称") },
+                    singleLine = true,
+                    enabled = !state.isSaving,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = state.ttsVoice,
+                    onValueChange = onTtsVoiceChanged,
+                    label = { Text("TTS 音色") },
+                    supportingText = { Text("默认：longanfengyue（自然亲切）") },
+                    singleLine = true,
+                    enabled = !state.isSaving,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
+                Text("TTS 音频格式", style = MaterialTheme.typography.titleLarge)
+                VoiceAudioFormat.entries.forEach { format ->
+                    DialectOption(
+                        label = format.wireName.uppercase(),
+                        selected = state.ttsResponseFormat == format,
+                        onClick = { onTtsResponseFormatChanged(format) },
+                        enabled = !state.isSaving,
+                    )
+                }
+            }
+            item {
+                NumberField(
+                    value = state.ttsSampleRate,
+                    onValueChange = onTtsSampleRateChanged,
+                    label = "TTS 采样率",
+                    supportingText = "8000、16000、22050、24000、44100 或 48000",
+                    enabled = !state.isSaving,
+                )
+            }
+            item {
+                NumberField(
+                    value = state.ttsVolume,
+                    onValueChange = onTtsVolumeChanged,
+                    label = "TTS 音量",
+                    supportingText = "0—100，默认 50",
+                    enabled = !state.isSaving,
+                )
+            }
+            item {
+                NumberField(
+                    value = state.ttsRate,
+                    onValueChange = onTtsRateChanged,
+                    label = "TTS 语速",
+                    supportingText = "0.5—2.0，默认 0.9",
+                    enabled = !state.isSaving,
+                    decimal = true,
+                )
+                Spacer(modifier = Modifier.height(ElderSpacing.small))
+                NumberField(
+                    value = state.ttsPitch,
+                    onValueChange = onTtsPitchChanged,
+                    label = "TTS 音调",
+                    supportingText = "0.5—2.0，默认 1.0",
+                    enabled = !state.isSaving,
+                    decimal = true,
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = state.voiceLanguage,
+                    onValueChange = onVoiceLanguageChanged,
+                    label = { Text("语音语言") },
+                    supportingText = { Text("默认：zh") },
+                    singleLine = true,
+                    enabled = !state.isSaving,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     shape = MaterialTheme.shapes.large,
@@ -186,7 +317,7 @@ fun ModelConfigurationScreen(
                     Column(modifier = Modifier.padding(ElderSpacing.medium)) {
                         Text("API Key 安全说明", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            "API Key 不会经过中台，也不能在此页面填写。它只能加密保存在老人设备中。开发用的无密钥 llama-server 可以直接使用以上配置。",
+                            "MLLM Key 和 ASR/TTS 共用的语音 Key 都不会经过中台，也不能在此页面填写。它们只能加密保存在老人设备中。",
                             style = MaterialTheme.typography.bodyLarge,
                         )
                         Text(

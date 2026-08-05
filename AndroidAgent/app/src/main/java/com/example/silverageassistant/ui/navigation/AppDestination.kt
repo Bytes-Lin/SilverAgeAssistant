@@ -17,7 +17,7 @@ enum class AppDestination(val route: String) {
     Reminders("reminders"),
     LifeAssistant("life_assistant"),
     FamilyContacts("family_contacts"),
-    Music("music"),
+    News("news"),
     Sos("sos"),
     Settings("settings"),
 }

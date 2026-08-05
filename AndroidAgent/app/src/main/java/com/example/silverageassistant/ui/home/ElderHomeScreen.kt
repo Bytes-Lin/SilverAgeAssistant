@@ -21,9 +21,8 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.rounded.FamilyRestroom
-import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.ShoppingBag
@@ -57,7 +56,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.silverageassistant.ui.components.ElderScreenScaffold
-import com.example.silverageassistant.ui.components.LargeActionButton
 import com.example.silverageassistant.ui.onboarding.SessionConnectionStatus
 import com.example.silverageassistant.ui.theme.ElderSpacing
 import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
@@ -82,7 +80,7 @@ fun ElderHomeRoute(
     onReminders: () -> Unit,
     onLifeAssistant: () -> Unit,
     onFamilyContacts: () -> Unit,
-    onMusic: () -> Unit,
+    onNews: () -> Unit,
     onSos: () -> Unit,
     onSettings: () -> Unit,
     elderName: String,
@@ -127,7 +125,7 @@ fun ElderHomeRoute(
         onReminders = onReminders,
         onLifeAssistant = onLifeAssistant,
         onFamilyContacts = onFamilyContacts,
-        onMusic = onMusic,
+        onNews = onNews,
         onSos = onSos,
         onSettings = onSettings,
         modifier = modifier,
@@ -145,7 +143,7 @@ fun ElderHomeScreen(
     onReminders: () -> Unit,
     onLifeAssistant: () -> Unit,
     onFamilyContacts: () -> Unit,
-    onMusic: () -> Unit,
+    onNews: () -> Unit,
     onSos: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
@@ -163,7 +161,7 @@ fun ElderHomeScreen(
         HomeAction("今日提醒", "查看今天要做的事", Icons.Rounded.NotificationsActive, onClick = onReminders),
         HomeAction("生活助手", "购物、出行和查询", Icons.Rounded.ShoppingBag, onClick = onLifeAssistant),
         HomeAction("联系家人", "给家人打电话", Icons.Rounded.FamilyRestroom, onClick = onFamilyContacts),
-        HomeAction("听音乐", "播放手机里的音乐", Icons.Rounded.MusicNote, onClick = onMusic),
+        HomeAction("新闻播报", "查看今日热点新闻", Icons.AutoMirrored.Rounded.Article, onClick = onNews),
         HomeAction("紧急求助", "需要帮助时按这里", Icons.Rounded.Sos, isEmergency = true, onClick = onSos),
     )
 
@@ -174,17 +172,6 @@ fun ElderHomeScreen(
         actions = {
             IconButton(onClick = onSettings) {
                 Icon(imageVector = Icons.Rounded.Settings, contentDescription = "打开设置")
-            }
-        },
-        bottomBar = {
-            Surface(shadowElevation = 8.dp) {
-                LargeActionButton(
-                    text = "点这里和我说话",
-                    contentDescription = "打开语音对话",
-                    icon = Icons.Rounded.Mic,
-                    onClick = onConversation,
-                    modifier = Modifier.padding(ElderSpacing.medium),
-                )
             }
         },
     ) { paddingValues ->
@@ -421,6 +408,6 @@ private fun HomeActionCard(action: HomeAction) {
 @Composable
 private fun ElderHomePreview() {
     SilverAgeAssistantTheme(darkTheme = false) {
-        ElderHomeScreen(onConversation = {}, onReminders = {}, onLifeAssistant = {}, onFamilyContacts = {}, onMusic = {}, onSos = {}, onSettings = {})
+        ElderHomeScreen(onConversation = {}, onReminders = {}, onLifeAssistant = {}, onFamilyContacts = {}, onNews = {}, onSos = {}, onSettings = {})
     }
 }

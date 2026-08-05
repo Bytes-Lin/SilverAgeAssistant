@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">银龄助手</string>
+    <string name="gui_accessibility_service_description">在老人明确启动 GUI 辅助任务后显示控制条，并检测人工操作以立即暂停任务。</string>
 </resources>

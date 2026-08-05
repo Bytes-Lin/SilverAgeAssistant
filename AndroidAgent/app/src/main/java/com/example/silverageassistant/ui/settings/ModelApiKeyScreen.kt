@@ -41,10 +41,13 @@ import com.example.silverageassistant.ui.theme.ElderSpacing
 fun ModelApiKeyRoute(
     onBack: () -> Unit,
     viewModel: ModelApiKeyViewModel,
+    voiceSettingsViewModel: VoiceSettingsViewModel,
 ) {
     val state by viewModel.uiState.collectAsState()
+    val voiceState by voiceSettingsViewModel.uiState.collectAsState()
     ModelApiKeyScreen(
         state = state,
+        voiceState = voiceState,
         onBack = onBack,
         onDraftChanged = viewModel::updateDraft,
         onToggleVisibility = viewModel::toggleKeyVisibility,
@@ -52,12 +55,18 @@ fun ModelApiKeyRoute(
         onRequestDelete = viewModel::requestDelete,
         onCancelDelete = viewModel::cancelDelete,
         onConfirmDelete = viewModel::confirmDelete,
+        onVoiceEnabledChanged = voiceSettingsViewModel::setEnabled,
+        onVoiceApiKeyChanged = voiceSettingsViewModel::updateApiKeyDraft,
+        onToggleVoiceApiKeyVisibility = voiceSettingsViewModel::toggleApiKeyVisibility,
+        onSaveVoiceApiKey = voiceSettingsViewModel::saveApiKey,
+        onClearVoiceApiKey = voiceSettingsViewModel::clearApiKey,
     )
 }
 
 @Composable
 fun ModelApiKeyScreen(
     state: ModelApiKeyUiState,
+    voiceState: VoiceSettingsUiState = VoiceSettingsUiState(isLoading = false),
     onBack: () -> Unit,
     onDraftChanged: (String) -> Unit,
     onToggleVisibility: () -> Unit,
@@ -65,6 +74,11 @@ fun ModelApiKeyScreen(
     onRequestDelete: () -> Unit,
     onCancelDelete: () -> Unit,
     onConfirmDelete: () -> Unit,
+    onVoiceEnabledChanged: (Boolean) -> Unit = {},
+    onVoiceApiKeyChanged: (String) -> Unit = {},
+    onToggleVoiceApiKeyVisibility: () -> Unit = {},
+    onSaveVoiceApiKey: () -> Unit = {},
+    onClearVoiceApiKey: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     ElderScreenScaffold(
@@ -79,6 +93,16 @@ fun ModelApiKeyScreen(
                 .padding(horizontal = ElderSpacing.medium),
             verticalArrangement = Arrangement.spacedBy(ElderSpacing.medium),
         ) {
+            item {
+                VoiceSettingsSection(
+                    state = voiceState,
+                    onEnabledChanged = onVoiceEnabledChanged,
+                    onApiKeyChanged = onVoiceApiKeyChanged,
+                    onToggleApiKeyVisibility = onToggleVoiceApiKeyVisibility,
+                    onSaveApiKey = onSaveVoiceApiKey,
+                    onClearApiKey = onClearVoiceApiKey,
+                )
+            }
             item {
                 Text("API Key", style = MaterialTheme.typography.headlineMedium)
                 Text(

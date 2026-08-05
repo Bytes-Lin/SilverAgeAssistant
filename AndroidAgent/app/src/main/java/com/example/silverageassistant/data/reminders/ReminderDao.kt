@@ -25,4 +25,14 @@ interface ReminderDao {
 
     @Query("UPDATE reminders SET status = :status WHERE id = :id")
     suspend fun updateStatus(id: String, status: String)
+
+    @Query(
+        """UPDATE reminders SET voice_announcement_state = :state,
+        voice_announced_at_epoch_millis = :announcedAt,
+        voice_attempt_count = voice_attempt_count + 1 WHERE id = :id""",
+    )
+    suspend fun updateVoiceAnnouncement(id: String, state: String, announcedAt: Long?)
+
+    @Query("SELECT * FROM reminders WHERE voice_announcement_state = 'PENDING'")
+    suspend fun pendingVoiceAnnouncements(): List<ReminderEntity>
 }

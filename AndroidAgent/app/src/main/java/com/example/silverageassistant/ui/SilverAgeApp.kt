@@ -1,20 +1,28 @@
 package com.example.silverageassistant.ui
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.ShoppingBag
 import androidx.compose.material.icons.rounded.Sos
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.currentBackStackEntryAsState
 import com.example.silverageassistant.ui.conversation.ConversationRoute
 import com.example.silverageassistant.ui.conversation.ConversationViewModel
 import com.example.silverageassistant.ui.family.FamilyContactsRoute
@@ -27,6 +35,8 @@ import com.example.silverageassistant.ui.home.ElderHomeRoute
 import com.example.silverageassistant.ui.home.ElderHomeScreen
 import com.example.silverageassistant.ui.home.HomeWeatherViewModel
 import com.example.silverageassistant.ui.navigation.AppDestination
+import com.example.silverageassistant.ui.news.NewsRoute
+import com.example.silverageassistant.ui.news.NewsViewModel
 import com.example.silverageassistant.ui.modelconfig.ModelConfigurationRoute
 import com.example.silverageassistant.ui.modelconfig.ModelConfigurationViewModel
 import com.example.silverageassistant.ui.onboarding.ElderSetupRoute
@@ -39,6 +49,7 @@ import com.example.silverageassistant.ui.reminders.ReminderViewModel
 import com.example.silverageassistant.ui.role.RoleSelectionScreen
 import com.example.silverageassistant.ui.settings.ModelApiKeyRoute
 import com.example.silverageassistant.ui.settings.ModelApiKeyViewModel
+import com.example.silverageassistant.ui.settings.VoiceSettingsViewModel
 import com.example.silverageassistant.ui.usage.FamilyUsageRoute
 import com.example.silverageassistant.ui.usage.FamilyUsageViewModel
 import com.example.silverageassistant.ui.safety.FamilyEmergencyAlertHost
@@ -46,6 +57,12 @@ import com.example.silverageassistant.ui.safety.FamilySafetyEventsRoute
 import com.example.silverageassistant.ui.safety.SafetyMonitoringConfigurationRoute
 import com.example.silverageassistant.ui.safety.SafetyMonitoringViewModel
 import com.example.silverageassistant.data.session.AppRole
+import com.example.silverageassistant.domain.gui.GuiTargetAppLauncher
+import com.example.silverageassistant.domain.gui.GuiTaskController
+import com.example.silverageassistant.ui.gui.GuiTaskControlHost
+import com.example.silverageassistant.ui.gui.GuiDebugPanelHost
+import com.example.silverageassistant.BuildConfig
+import com.example.silverageassistant.service.GuiTaskNavigationBridge
 
 @Composable
 fun SilverAgeApp(
@@ -58,11 +75,36 @@ fun SilverAgeApp(
     conversationViewModel: ConversationViewModel = viewModel(),
     modelConfigurationViewModel: ModelConfigurationViewModel? = null,
     modelApiKeyViewModel: ModelApiKeyViewModel? = null,
+    voiceSettingsViewModel: VoiceSettingsViewModel? = null,
     homeWeatherViewModel: HomeWeatherViewModel? = null,
+    newsViewModel: NewsViewModel? = null,
     familyUsageViewModel: FamilyUsageViewModel? = null,
     safetyMonitoringViewModel: SafetyMonitoringViewModel? = null,
+    guiTaskController: GuiTaskController? = null,
+    guiTargetAppLauncher: GuiTargetAppLauncher? = null,
+    onElderModeActiveChanged: (Boolean) -> Unit = {},
 ) {
     val onboardingState by onboardingViewModel.uiState.collectAsState()
+    val currentBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = currentBackStackEntry?.destination?.route
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(currentRoute) {
+        onElderModeActiveChanged(currentRoute in elderModeRoutes)
+    }
+    DisposableEffect(lifecycleOwner, currentRoute) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    onElderModeActiveChanged(currentRoute in elderModeRoutes)
+                }
+                Lifecycle.Event.ON_STOP -> onElderModeActiveChanged(false)
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val guiConversationRequest by GuiTaskNavigationBridge.conversationRequest.collectAsState()
     val safetyState = if (safetyMonitoringViewModel != null) {
         val state by safetyMonitoringViewModel.uiState.collectAsState()
         state
@@ -86,11 +128,20 @@ fun SilverAgeApp(
             safetyMonitoringViewModel?.syncElderConfiguration()
         }
     }
-    NavHost(
-        navController = navController,
-        startDestination = onboardingState.startupDestination.toAppDestination().route,
-        modifier = modifier,
-    ) {
+    LaunchedEffect(guiConversationRequest) {
+        val requestId = guiConversationRequest ?: return@LaunchedEffect
+        navController.navigate(AppDestination.Conversation.route) {
+            launchSingleTop = true
+            popUpTo(AppDestination.ElderHome.route)
+        }
+        GuiTaskNavigationBridge.consumeConversationRequest(requestId)
+    }
+    Box(modifier = modifier.fillMaxSize()) {
+        NavHost(
+            navController = navController,
+            startDestination = onboardingState.startupDestination.toAppDestination().route,
+            modifier = Modifier.fillMaxSize(),
+        ) {
         composable(AppDestination.RoleSelection.route) {
             RoleSelectionScreen(
                 isLoading = onboardingState.isRestoringProfiles,
@@ -149,7 +200,7 @@ fun SilverAgeApp(
             val onFamilyContacts = {
                 navController.navigateOnce(AppDestination.FamilyContacts)
             }
-            val onMusic = { navController.navigateOnce(AppDestination.Music) }
+            val onNews = { navController.navigateOnce(AppDestination.News) }
             val onSos = { navController.navigateOnce(AppDestination.Sos) }
             val onSettings = { navController.navigateOnce(AppDestination.Settings) }
             if (homeWeatherViewModel == null) {
@@ -161,7 +212,7 @@ fun SilverAgeApp(
                     onReminders = onReminders,
                     onLifeAssistant = onLifeAssistant,
                     onFamilyContacts = onFamilyContacts,
-                    onMusic = onMusic,
+                    onNews = onNews,
                     onSos = onSos,
                     onSettings = onSettings,
                 )
@@ -174,7 +225,7 @@ fun SilverAgeApp(
                     onReminders = onReminders,
                     onLifeAssistant = onLifeAssistant,
                     onFamilyContacts = onFamilyContacts,
-                    onMusic = onMusic,
+                    onNews = onNews,
                     onSos = onSos,
                     onSettings = onSettings,
                     weatherViewModel = homeWeatherViewModel,
@@ -348,13 +399,20 @@ fun SilverAgeApp(
                 onBack = { navController.popBackStack() },
             )
         }
-        composable(AppDestination.Music.route) {
-            FeaturePlaceholderScreen(
-                title = "听音乐",
-                message = "以后可以在这里播放手机中已授权的本地音乐，断网时也能使用。",
-                icon = Icons.Rounded.MusicNote,
-                onBack = { navController.popBackStack() },
-            )
+        composable(AppDestination.News.route) {
+            if (newsViewModel == null) {
+                FeaturePlaceholderScreen(
+                    title = "新闻播报",
+                    message = "新闻组件尚未初始化。",
+                    icon = Icons.AutoMirrored.Rounded.Article,
+                    onBack = { navController.popBackStack() },
+                )
+            } else {
+                NewsRoute(
+                    onBack = { navController.popBackStack() },
+                    viewModel = newsViewModel,
+                )
+            }
         }
         composable(AppDestination.Sos.route) {
             FeaturePlaceholderScreen(
@@ -366,7 +424,7 @@ fun SilverAgeApp(
             )
         }
         composable(AppDestination.Settings.route) {
-            if (modelApiKeyViewModel == null) {
+            if (modelApiKeyViewModel == null || voiceSettingsViewModel == null) {
                 FeaturePlaceholderScreen(
                     title = "模型服务设置",
                     message = "模型密钥设置组件尚未初始化。",
@@ -377,19 +435,45 @@ fun SilverAgeApp(
                 ModelApiKeyRoute(
                     onBack = { navController.popBackStack() },
                     viewModel = modelApiKeyViewModel,
+                    voiceSettingsViewModel = voiceSettingsViewModel,
                 )
             }
         }
-    }
-    if (onboardingState.hasFamilySession) {
-        FamilyEmergencyAlertHost(
-            state = safetyState,
-            onAcknowledged = { event ->
-                safetyMonitoringViewModel?.acknowledgeEmergency(event)
-            },
-        )
+        }
+        if (guiTaskController != null && guiTargetAppLauncher != null) {
+            GuiTaskControlHost(
+                controller = guiTaskController,
+                targetAppLauncher = guiTargetAppLauncher,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+        }
+        if (BuildConfig.DEBUG) {
+            GuiDebugPanelHost(
+                modifier = Modifier.align(Alignment.BottomEnd),
+            )
+        }
+        if (onboardingState.hasFamilySession) {
+            FamilyEmergencyAlertHost(
+                state = safetyState,
+                onAcknowledged = { event ->
+                    safetyMonitoringViewModel?.acknowledgeEmergency(event)
+                },
+            )
+        }
     }
 }
+
+private val elderModeRoutes = setOf(
+    AppDestination.ElderSetup.route,
+    AppDestination.ElderHome.route,
+    AppDestination.Conversation.route,
+    AppDestination.Reminders.route,
+    AppDestination.LifeAssistant.route,
+    AppDestination.FamilyContacts.route,
+    AppDestination.News.route,
+    AppDestination.Sos.route,
+    AppDestination.Settings.route,
+)
 
 private fun StartupDestination.toAppDestination(): AppDestination = when (this) {
     StartupDestination.RoleSelection -> AppDestination.RoleSelection

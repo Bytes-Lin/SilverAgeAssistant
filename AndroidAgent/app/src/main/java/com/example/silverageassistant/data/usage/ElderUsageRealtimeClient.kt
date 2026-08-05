@@ -34,6 +34,12 @@ class ElderUsageRealtimeClient(
     private var onSafetyMonitoringConfigurationAvailable: (() -> Unit)? = null
 
     @Volatile
+    private var onModelConfigurationAvailable: (() -> Unit)? = null
+
+    @Volatile
+    private var onCommandAvailable: (() -> Unit)? = null
+
+    @Volatile
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
 
@@ -44,6 +50,18 @@ class ElderUsageRealtimeClient(
 
     fun setSafetyMonitoringConfigurationListener(listener: (() -> Unit)?) {
         onSafetyMonitoringConfigurationAvailable = listener
+    }
+
+    /**
+     * Registers the reliable-REST refresh triggered by a minimal WebSocket hint.
+     * The event never carries model endpoints, parameters, or credentials itself.
+     */
+    fun setModelConfigurationListener(listener: (() -> Unit)?) {
+        onModelConfigurationAvailable = listener
+    }
+
+    fun setCommandAvailableListener(listener: (() -> Unit)?) {
+        onCommandAvailable = listener
     }
 
     fun stop() {
@@ -88,16 +106,7 @@ class ElderUsageRealtimeClient(
 
     private inner class Listener : WebSocketListener() {
         override fun onMessage(webSocket: WebSocket, text: String) {
-            val messageType = runCatching {
-                JSONObject(text).optString("message_type")
-            }.getOrNull()
-            if (messageType == USAGE_REPORT_REQUESTED) {
-                runCatching(onUsageReportRequested)
-            } else if (messageType == SAFETY_CONFIG_AVAILABLE) {
-                onSafetyMonitoringConfigurationAvailable?.let { listener ->
-                    runCatching(listener)
-                }
-            }
+            dispatchServerMessage(text)
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -112,6 +121,29 @@ class ElderUsageRealtimeClient(
                 this@ElderUsageRealtimeClient.webSocket = null
             }
             scheduleReconnect()
+        }
+    }
+
+    internal fun dispatchServerMessage(text: String) {
+        val messageType = runCatching {
+            JSONObject(text).optString("message_type")
+        }.getOrNull()
+        dispatchMessageType(messageType)
+    }
+
+    internal fun dispatchMessageType(messageType: String?) {
+        if (messageType == USAGE_REPORT_REQUESTED) {
+            runCatching(onUsageReportRequested)
+        } else if (messageType == SAFETY_CONFIG_AVAILABLE) {
+            onSafetyMonitoringConfigurationAvailable?.let { listener ->
+                runCatching(listener)
+            }
+        } else if (messageType == MODEL_CONFIG_AVAILABLE) {
+            onModelConfigurationAvailable?.let { listener ->
+                runCatching(listener)
+            }
+        } else if (messageType == COMMAND_AVAILABLE) {
+            onCommandAvailable?.let { listener -> runCatching(listener) }
         }
     }
 
@@ -138,6 +170,8 @@ class ElderUsageRealtimeClient(
     private companion object {
         const val USAGE_REPORT_REQUESTED = "MODEL_USAGE_REPORT_REQUESTED"
         const val SAFETY_CONFIG_AVAILABLE = "SAFETY_MONITORING_CONFIG_AVAILABLE"
+        const val MODEL_CONFIG_AVAILABLE = "MODEL_CONFIG_AVAILABLE"
+        const val COMMAND_AVAILABLE = "COMMAND_AVAILABLE"
         const val PING_INTERVAL_SECONDS = 30L
         const val RECONNECT_DELAY_MILLIS = 5_000L
     }

@@ -9,6 +9,8 @@ import java.net.URLEncoder
 import java.util.UUID
 import com.example.silverageassistant.data.model.ModelRuntimeConfiguration
 import com.example.silverageassistant.data.model.OpenAiCompatibleDialect
+import com.example.silverageassistant.data.model.VoiceAudioFormat
+import com.example.silverageassistant.data.model.VoiceRuntimeConfiguration
 import com.example.silverageassistant.data.usage.ModelUsagePolicy
 import com.example.silverageassistant.data.safety.SafetyMonitoringConfiguration
 import kotlinx.coroutines.Dispatchers
@@ -488,6 +490,19 @@ class HttpOnboardingMiddleServerRepository(
         ).toSafetyEvent()
     }
 
+    override suspend fun resolveSafetyEvent(
+        elderId: String,
+        eventId: String,
+        clientRequestId: String,
+    ): SafetyEvent = withFamilyAccessToken { accessToken ->
+        post(
+            path = "/elders/$elderId/safety-events/$eventId/resolve",
+            body = JSONObject().put("client_request_id", clientRequestId),
+            bearerToken = accessToken,
+            idempotencyKey = clientRequestId,
+        ).toSafetyEvent()
+    }
+
     override suspend fun getSafetyEventImage(
         elderId: String,
         eventId: String,
@@ -702,6 +717,11 @@ class HttpOnboardingMiddleServerRepository(
             optString("acknowledged_at").takeIf(String::isNotBlank)
         },
         createdAt = requiredString("created_at"),
+        resolvedAt = if (!has("resolved_at") || isNull("resolved_at")) {
+            null
+        } else {
+            optString("resolved_at").takeIf(String::isNotBlank)
+        },
         imageAvailable = optBoolean("image_available", false),
         imageContentType = optString("image_content_type").takeIf(String::isNotBlank),
         imageByteSize = if (!has("image_byte_size") || isNull("image_byte_size")) {
@@ -951,6 +971,24 @@ class HttpOnboardingMiddleServerRepository(
         val configuration = optJSONObject("configuration") ?: this
         val sampling = configuration.optJSONObject("sampling")
             ?: throw JSONException("Missing response field")
+        val voice = configuration.optJSONObject("voice")?.let { voiceObject ->
+            VoiceRuntimeConfiguration(
+                webSocketUrl = voiceObject.requiredString("websocket_url"),
+                asrModel = voiceObject.requiredString("asr_model"),
+                ttsModel = voiceObject.requiredString("tts_model"),
+                ttsVoice = voiceObject.requiredString("tts_voice"),
+                ttsResponseFormat = runCatching {
+                    VoiceAudioFormat.fromWireName(
+                        voiceObject.requiredString("tts_response_format"),
+                    )
+                }.getOrElse { throw JSONException("Unknown voice audio format") },
+                ttsSampleRate = voiceObject.getInt("tts_sample_rate"),
+                ttsVolume = voiceObject.getInt("tts_volume"),
+                ttsRate = voiceObject.getDouble("tts_rate"),
+                ttsPitch = voiceObject.getDouble("tts_pitch"),
+                language = voiceObject.requiredString("language"),
+            )
+        }
         return ModelRuntimeConfiguration(
             schemaVersion = configuration.optInt(
                 "schema_version",
@@ -972,6 +1010,7 @@ class HttpOnboardingMiddleServerRepository(
             temperature = sampling.getDouble("temperature"),
             topP = sampling.getDouble("top_p"),
             topK = sampling.getInt("top_k"),
+            voice = voice,
             updatedAt = optString("updated_at")
                 .ifBlank { configuration.optString("updated_at") }
                 .takeIf(String::isNotBlank),
@@ -993,6 +1032,27 @@ class HttpOnboardingMiddleServerRepository(
                 .put("top_k", topK),
         )
         .put("reasoning_enabled", false)
+        .also { root ->
+            voice?.let { voiceConfiguration ->
+                root.put(
+                    "voice",
+                    JSONObject()
+                        .put("websocket_url", voiceConfiguration.webSocketUrl)
+                        .put("asr_model", voiceConfiguration.asrModel)
+                        .put("tts_model", voiceConfiguration.ttsModel)
+                        .put("tts_voice", voiceConfiguration.ttsVoice)
+                        .put(
+                            "tts_response_format",
+                            voiceConfiguration.ttsResponseFormat.wireName,
+                        )
+                        .put("tts_sample_rate", voiceConfiguration.ttsSampleRate)
+                        .put("tts_volume", voiceConfiguration.ttsVolume)
+                        .put("tts_rate", voiceConfiguration.ttsRate)
+                        .put("tts_pitch", voiceConfiguration.ttsPitch)
+                        .put("language", voiceConfiguration.language),
+                )
+            }
+        }
 
     private fun authenticationRequired(message: String) = MiddleServerRequestException(
         code = "AUTHENTICATION_REQUIRED",

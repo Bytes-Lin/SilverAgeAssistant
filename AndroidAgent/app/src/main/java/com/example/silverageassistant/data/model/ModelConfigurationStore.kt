@@ -117,12 +117,45 @@ class JsonModelConfigurationStore private constructor(
             },
         )
         put("reasoning_enabled", false)
+        configuration.voice?.let { voice ->
+            put(
+                "voice",
+                buildJsonObject {
+                    put("websocket_url", voice.webSocketUrl)
+                    put("asr_model", voice.asrModel)
+                    put("tts_model", voice.ttsModel)
+                    put("tts_voice", voice.ttsVoice)
+                    put("tts_response_format", voice.ttsResponseFormat.wireName)
+                    put("tts_sample_rate", voice.ttsSampleRate)
+                    put("tts_volume", voice.ttsVolume)
+                    put("tts_rate", voice.ttsRate)
+                    put("tts_pitch", voice.ttsPitch)
+                    put("language", voice.language)
+                },
+            )
+        }
         configuration.updatedAt?.let { put("updated_at", it) }
     }
 
     private fun decode(value: String): ModelRuntimeConfiguration {
         val root = json.parseToJsonElement(value).jsonObject
         val sampling = root.getValue("sampling").jsonObject
+        val voice = root["voice"]?.jsonObject?.let { voiceObject ->
+            VoiceRuntimeConfiguration(
+                webSocketUrl = voiceObject.getValue("websocket_url").jsonPrimitive.content,
+                asrModel = voiceObject.getValue("asr_model").jsonPrimitive.content,
+                ttsModel = voiceObject.getValue("tts_model").jsonPrimitive.content,
+                ttsVoice = voiceObject.getValue("tts_voice").jsonPrimitive.content,
+                ttsResponseFormat = VoiceAudioFormat.fromWireName(
+                    voiceObject.getValue("tts_response_format").jsonPrimitive.content,
+                ),
+                ttsSampleRate = voiceObject.getValue("tts_sample_rate").jsonPrimitive.int,
+                ttsVolume = voiceObject.getValue("tts_volume").jsonPrimitive.int,
+                ttsRate = voiceObject.getValue("tts_rate").jsonPrimitive.double,
+                ttsPitch = voiceObject.getValue("tts_pitch").jsonPrimitive.double,
+                language = voiceObject.getValue("language").jsonPrimitive.content,
+            )
+        }
         return ModelRuntimeConfiguration(
             schemaVersion = root.getValue("schema_version").jsonPrimitive.int,
             revision = root["revision"]?.jsonPrimitive?.longOrNull ?: 0,
@@ -141,6 +174,7 @@ class JsonModelConfigurationStore private constructor(
             temperature = sampling.getValue("temperature").jsonPrimitive.double,
             topP = sampling.getValue("top_p").jsonPrimitive.double,
             topK = sampling.getValue("top_k").jsonPrimitive.int,
+            voice = voice,
             updatedAt = root["updated_at"]?.jsonPrimitive?.content
                 ?.takeIf(String::isNotBlank),
         )

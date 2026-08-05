@@ -13,6 +13,7 @@ enum class SafetyEventType {
     FALL_SUSPECTED,
     UNCONSCIOUSNESS_SUSPECTED,
     OTHER_ABNORMALITY,
+    GUI_ORDER_ASSISTANCE_REQUIRED,
 }
 
 data class SafetyEvent(
@@ -24,6 +25,7 @@ data class SafetyEvent(
     val severity: SafetyEventSeverity,
     val acknowledgedAt: String?,
     val createdAt: String,
+    val resolvedAt: String? = null,
     val imageAvailable: Boolean = false,
     val imageContentType: String? = null,
     val imageByteSize: Long? = null,
@@ -67,6 +69,12 @@ interface FamilySafetyMonitoringRepository {
     suspend fun getTodaySafetyEvents(elderId: String): FamilySafetyEventsSnapshot
 
     suspend fun acknowledgeSafetyEvent(
+        elderId: String,
+        eventId: String,
+        clientRequestId: String,
+    ): SafetyEvent
+
+    suspend fun resolveSafetyEvent(
         elderId: String,
         eventId: String,
         clientRequestId: String,

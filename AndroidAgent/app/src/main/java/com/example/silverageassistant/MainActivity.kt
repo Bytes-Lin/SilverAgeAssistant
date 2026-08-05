@@ -13,22 +13,28 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
 import com.example.silverageassistant.data.middleserver.AndroidKeystoreCredentialStore
 import com.example.silverageassistant.data.middleserver.DeviceIdentityProvider
 import com.example.silverageassistant.data.middleserver.HttpOnboardingMiddleServerRepository
 import com.example.silverageassistant.data.model.AndroidKeystoreModelApiCredentialStore
+import com.example.silverageassistant.data.model.AndroidKeystoreVoiceApiCredentialStore
 import com.example.silverageassistant.data.model.ConfiguredChatModelProvider
 import com.example.silverageassistant.data.model.JsonModelConfigurationStore
 import com.example.silverageassistant.data.model.ModelConfigurationAgentOptionsProvider
 import com.example.silverageassistant.data.model.ModelRuntimeConfiguration
 import com.example.silverageassistant.data.model.OpenAiCompatibleDialect
+import com.example.silverageassistant.data.news.BaiduHotSearchNewsRepository
+import com.example.silverageassistant.data.news.CachedNewsRepository
 import com.example.silverageassistant.data.memory.MarkdownAgentLongTermMemory
 import com.example.silverageassistant.data.contacts.EncryptedFamilyContactStore
 import com.example.silverageassistant.data.onboarding.PreferencesOnboardingProfileStore
 import com.example.silverageassistant.data.reminders.RoomReminderRepository
 import com.example.silverageassistant.data.reminders.SilverAgeDatabase
+import com.example.silverageassistant.data.gui.RoomGuiTodoRepository
+import com.example.silverageassistant.data.gui.OpenAiGuiVisionPlanner
 import com.example.silverageassistant.data.session.PreferencesAppSessionStore
 import com.example.silverageassistant.data.weather.AndroidDeviceLocationProvider
 import com.example.silverageassistant.data.weather.AndroidLocationNameResolver
@@ -41,11 +47,18 @@ import com.example.silverageassistant.data.usage.ElderUsageRealtimeClient
 import com.example.silverageassistant.data.usage.LocationTimeZoneStore
 import com.example.silverageassistant.data.usage.RoomModelUsageRecorder
 import com.example.silverageassistant.data.usage.UsageTrackingChatModelProvider
+import com.example.silverageassistant.data.usage.AgentUsageScope
 import com.example.silverageassistant.data.safety.FamilySafetyRealtimeClient
 import com.example.silverageassistant.data.safety.JsonSafetyMonitoringConfigurationStore
+import com.example.silverageassistant.data.voice.DataStoreVoiceInteractionSettingsStore
+import com.example.silverageassistant.data.voice.QwenRealtimeAsrProvider
+import com.example.silverageassistant.data.voice.QwenRealtimeTtsProvider
 import com.example.silverageassistant.service.SafetyMonitoringService
+import com.example.silverageassistant.service.GuiTaskRuntimeBridge
+import com.example.silverageassistant.service.GuiAccessibilityRuntimeBridge
 import com.example.silverageassistant.ui.SilverAgeApp
 import com.example.silverageassistant.domain.agent.AgentChatCoordinator
+import com.example.silverageassistant.domain.agent.AgentToolCatalog
 import com.example.silverageassistant.domain.agent.AgentToolRegistry
 import com.example.silverageassistant.domain.agent.CurrentTimeTool
 import com.example.silverageassistant.domain.agent.CallFamilyContactTool
@@ -54,15 +67,30 @@ import com.example.silverageassistant.domain.agent.PendingPhoneCallCoordinator
 import com.example.silverageassistant.domain.agent.FamilySituationReporter
 import com.example.silverageassistant.domain.agent.ReportFamilySituationTool
 import com.example.silverageassistant.domain.agent.WeatherTool
+import com.example.silverageassistant.domain.agent.SharedAgentToolCapabilities
+import com.example.silverageassistant.domain.gui.GuiAgentTool
+import com.example.silverageassistant.domain.gui.DefaultGuiAgentSystemPromptProvider
+import com.example.silverageassistant.domain.gui.FamilyReportingGuiFailureEscalationSink
+import com.example.silverageassistant.domain.gui.GuiDebugSettings
+import com.example.silverageassistant.domain.gui.GuiMainAgentToolRouter
+import com.example.silverageassistant.domain.gui.NoOpGuiFailureEscalationSink
+import com.example.silverageassistant.domain.gui.GuiTaskChatFeedbackBus
+import com.example.silverageassistant.domain.gui.GuiTaskManager
+import com.example.silverageassistant.domain.voice.VoiceInteractionCoordinator
+import com.example.silverageassistant.platform.gui.AccessibilityGuiRunExecutor
+import com.example.silverageassistant.platform.gui.AndroidGuiTerminalTaskSink
+import com.example.silverageassistant.platform.gui.AndroidGuiTargetAppLauncher
 import com.example.silverageassistant.platform.phone.AndroidPhoneCallLauncher
 import com.example.silverageassistant.ui.conversation.ConversationViewModel
 import com.example.silverageassistant.ui.home.HomeWeatherViewModel
+import com.example.silverageassistant.ui.news.NewsViewModel
 import com.example.silverageassistant.ui.onboarding.OnboardingViewModel
 import com.example.silverageassistant.ui.family.FamilyCommunicationViewModel
 import com.example.silverageassistant.ui.family.FamilyContactsViewModel
 import com.example.silverageassistant.ui.reminders.ReminderViewModel
 import com.example.silverageassistant.ui.modelconfig.ModelConfigurationViewModel
 import com.example.silverageassistant.ui.settings.ModelApiKeyViewModel
+import com.example.silverageassistant.ui.settings.VoiceSettingsViewModel
 import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
 import com.example.silverageassistant.ui.usage.FamilyUsageViewModel
 import com.example.silverageassistant.ui.safety.SafetyMonitoringViewModel
@@ -90,6 +118,7 @@ class MainActivity : ComponentActivity() {
         ModelUsageReportWorker.schedule(applicationContext)
         enableEdgeToEdge()
         setContent {
+            val guiTaskScope = rememberCoroutineScope()
             val profileStore = remember {
                 PreferencesOnboardingProfileStore(applicationContext)
             }
@@ -99,6 +128,19 @@ class MainActivity : ComponentActivity() {
             val credentialStore = remember {
                 AndroidKeystoreCredentialStore(applicationContext)
             }
+            val middleServerRepository = remember {
+                BuildConfig.MIDDLE_SERVER_BASE_URL.takeIf(String::isNotBlank)?.let { baseUrl ->
+                    HttpOnboardingMiddleServerRepository(
+                        serverBaseUrl = baseUrl,
+                        credentialStore = credentialStore,
+                        deviceId = DeviceIdentityProvider(applicationContext).getOrCreate(),
+                        deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
+                    )
+                }
+            }
+            val familySituationReporter = remember(middleServerRepository) {
+                middleServerRepository?.let { FamilySituationReporter(it) }
+            }
             val database = remember {
                 SilverAgeDatabase.getInstance(applicationContext)
             }
@@ -106,6 +148,9 @@ class MainActivity : ComponentActivity() {
                 RoomReminderRepository(
                     database.reminderDao(),
                 )
+            }
+            val guiTodoRepository = remember {
+                RoomGuiTodoRepository(database.guiTodoDao())
             }
             val modelUsageRecorder = remember {
                 RoomModelUsageRecorder(database.modelUsageDao())
@@ -116,6 +161,18 @@ class MainActivity : ComponentActivity() {
             val pendingPhoneCallCoordinator = remember {
                 PendingPhoneCallCoordinator()
             }
+            val sharedAgentToolCatalog = remember {
+                AgentToolCatalog(listOf(CurrentTimeTool()))
+            }
+            val guiTargetAppLauncher = remember {
+                AndroidGuiTargetAppLauncher(applicationContext)
+            }
+            val guiTerminalTaskSink = remember {
+                AndroidGuiTerminalTaskSink(applicationContext)
+            }
+            val guiTaskChatFeedbackBus = remember {
+                GuiTaskChatFeedbackBus()
+            }
             val phoneCallLauncher = remember {
                 AndroidPhoneCallLauncher(applicationContext)
             }
@@ -124,6 +181,12 @@ class MainActivity : ComponentActivity() {
             }
             val modelCredentialStore = remember {
                 AndroidKeystoreModelApiCredentialStore(applicationContext)
+            }
+            val voiceCredentialStore = remember {
+                AndroidKeystoreVoiceApiCredentialStore(applicationContext)
+            }
+            val voiceSettingsStore = remember {
+                DataStoreVoiceInteractionSettingsStore(applicationContext)
             }
             val modelConfigurationStore = remember {
                 JsonModelConfigurationStore(
@@ -136,18 +199,56 @@ class MainActivity : ComponentActivity() {
                     allowCleartextHttp = BuildConfig.DEBUG,
                 )
             }
+            val voiceCoordinator = remember {
+                VoiceInteractionCoordinator(
+                    settingsStore = voiceSettingsStore,
+                    asrProvider = QwenRealtimeAsrProvider(
+                        context = applicationContext,
+                        configurationStore = modelConfigurationStore,
+                        credentialStore = voiceCredentialStore,
+                        usageRecorder = modelUsageRecorder,
+                    ),
+                    ttsProvider = QwenRealtimeTtsProvider(
+                        context = applicationContext,
+                        configurationStore = modelConfigurationStore,
+                        credentialStore = voiceCredentialStore,
+                        usageRecorder = modelUsageRecorder,
+                    ),
+                    applicationScope = guiTaskScope,
+                )
+            }
+            val guiVisionPlanner = remember {
+                OpenAiGuiVisionPlanner(
+                    configurationStore = modelConfigurationStore,
+                    credentialStore = modelCredentialStore,
+                    systemPromptProvider = DefaultGuiAgentSystemPromptProvider(),
+                    usageRecorder = modelUsageRecorder,
+                    groundingModeProvider = GuiDebugSettings::currentGroundingMode,
+                )
+            }
+            val guiTaskManager = remember {
+                GuiTaskManager(
+                    repository = guiTodoRepository,
+                    executor = AccessibilityGuiRunExecutor(
+                        launcher = guiTargetAppLauncher,
+                        controllerProvider = GuiAccessibilityRuntimeBridge.provider,
+                        planner = guiVisionPlanner,
+                    ),
+                    sharedTools = AgentToolRegistry(
+                        sharedAgentToolCatalog.toolsFor(
+                            SharedAgentToolCapabilities.GuiAgent,
+                        ),
+                    ),
+                    scope = guiTaskScope,
+                    escalationSink = familySituationReporter?.let {
+                        FamilyReportingGuiFailureEscalationSink(it)
+                    } ?: NoOpGuiFailureEscalationSink,
+                    terminalTaskSink = guiTerminalTaskSink,
+                    chatFeedbackSink = guiTaskChatFeedbackBus,
+                )
+            }
             val safetyMonitoringConfigurationStore = remember {
                 JsonSafetyMonitoringConfigurationStore(applicationContext)
-            }
-            val middleServerRepository = remember {
-                BuildConfig.MIDDLE_SERVER_BASE_URL.takeIf(String::isNotBlank)?.let { baseUrl ->
-                    HttpOnboardingMiddleServerRepository(
-                        serverBaseUrl = baseUrl,
-                        credentialStore = credentialStore,
-                        deviceId = DeviceIdentityProvider(applicationContext).getOrCreate(),
-                        deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
-                    )
-                }
             }
             val elderUsageRealtimeClient = remember {
                 BuildConfig.MIDDLE_SERVER_BASE_URL.takeIf(String::isNotBlank)?.let { baseUrl ->
@@ -174,6 +275,9 @@ class MainActivity : ComponentActivity() {
                     onLocationTimeZoneResolved = locationTimeZoneStore::saveLocationTimeZone,
                 )
             }
+            val newsRepository = remember {
+                CachedNewsRepository(BaiduHotSearchNewsRepository())
+            }
             val chatCoordinator = remember {
                 val configuredProvider = ConfiguredChatModelProvider(
                     configurationStore = modelConfigurationStore,
@@ -184,22 +288,27 @@ class MainActivity : ComponentActivity() {
                         delegate = configuredProvider,
                         configurationStore = modelConfigurationStore,
                         recorder = modelUsageRecorder,
-                        feature = "conversation",
+                        feature = AgentUsageScope.MAIN_CHAT.feature,
                     ),
                     toolRegistry = AgentToolRegistry(
                         buildList {
-                            add(CurrentTimeTool())
+                            addAll(
+                                sharedAgentToolCatalog.toolsFor(
+                                    SharedAgentToolCapabilities.MainChat,
+                                ),
+                            )
                             add(WeatherTool(weatherRepository))
+                            add(GuiAgentTool(guiTaskManager))
                             add(
                                 CallFamilyContactTool(
                                     contactStore = familyContactStore,
                                     pendingCallCoordinator = pendingPhoneCallCoordinator,
                                 ),
                             )
-                            middleServerRepository?.let { repository ->
+                            familySituationReporter?.let { reporter ->
                                 add(
                                     ReportFamilySituationTool(
-                                        FamilySituationReporter(repository),
+                                        reporter,
                                     ),
                                 )
                             }
@@ -209,6 +318,7 @@ class MainActivity : ComponentActivity() {
                     optionsProvider = ModelConfigurationAgentOptionsProvider(
                         modelConfigurationStore,
                     ),
+                    deterministicToolRouter = GuiMainAgentToolRouter(),
                 )
             }
             val onboardingViewModel: OnboardingViewModel = viewModel(
@@ -227,6 +337,7 @@ class MainActivity : ComponentActivity() {
                 factory = ReminderViewModel.Factory(
                     reminderRepository = reminderRepository,
                     commandRepository = middleServerRepository,
+                    voiceCoordinator = voiceCoordinator,
                 ),
             )
             val familyContactsViewModel: FamilyContactsViewModel = viewModel(
@@ -241,6 +352,8 @@ class MainActivity : ComponentActivity() {
                     coordinator = chatCoordinator,
                     pendingPhoneCallCoordinator = pendingPhoneCallCoordinator,
                     phoneCallLauncher = phoneCallLauncher,
+                    guiTaskChatFeedbackSource = guiTaskChatFeedbackBus,
+                    voiceCoordinator = voiceCoordinator,
                 ),
             )
             val modelConfigurationViewModel: ModelConfigurationViewModel = viewModel(
@@ -254,8 +367,17 @@ class MainActivity : ComponentActivity() {
             val modelApiKeyViewModel: ModelApiKeyViewModel = viewModel(
                 factory = ModelApiKeyViewModel.Factory(modelCredentialStore),
             )
+            val voiceSettingsViewModel: VoiceSettingsViewModel = viewModel(
+                factory = VoiceSettingsViewModel.Factory(
+                    settingsStore = voiceSettingsStore,
+                    credentialStore = voiceCredentialStore,
+                ),
+            )
             val homeWeatherViewModel: HomeWeatherViewModel = viewModel(
                 factory = HomeWeatherViewModel.Factory(weatherRepository),
+            )
+            val newsViewModel: NewsViewModel = viewModel(
+                factory = NewsViewModel.Factory(newsRepository, voiceCoordinator),
             )
             val familyUsageViewModel: FamilyUsageViewModel = viewModel(
                 factory = FamilyUsageViewModel.Factory(middleServerRepository),
@@ -278,6 +400,13 @@ class MainActivity : ComponentActivity() {
             }
             val onboardingState by onboardingViewModel.uiState.collectAsState()
             val safetyConfiguration by safetyMonitoringConfigurationStore.configuration.collectAsState()
+            DisposableEffect(guiTaskManager, guiTargetAppLauncher) {
+                GuiTaskRuntimeBridge.bind(guiTaskManager, guiTargetAppLauncher)
+                onDispose { GuiTaskRuntimeBridge.unbind(guiTaskManager) }
+            }
+            LaunchedEffect(guiTaskManager) {
+                guiTaskManager.recoverInterruptedTodos()
+            }
             LaunchedEffect(
                 onboardingState.hasDeviceCredential,
                 safetyConfiguration.enabled,
@@ -298,9 +427,19 @@ class MainActivity : ComponentActivity() {
                     safetyConfiguration.intervalMinutes,
                 )
             }
-            LaunchedEffect(elderUsageRealtimeClient, safetyMonitoringViewModel) {
+            LaunchedEffect(
+                elderUsageRealtimeClient,
+                safetyMonitoringViewModel,
+                modelConfigurationViewModel,
+            ) {
                 elderUsageRealtimeClient?.setSafetyMonitoringConfigurationListener(
                     safetyMonitoringViewModel::syncElderConfiguration,
+                )
+                elderUsageRealtimeClient?.setModelConfigurationListener(
+                    modelConfigurationViewModel::syncElderConfiguration,
+                )
+                elderUsageRealtimeClient?.setCommandAvailableListener(
+                    reminderViewModel::syncRemoteCommands,
                 )
             }
             LaunchedEffect(onboardingState.hasDeviceCredential, elderUsageRealtimeClient) {
@@ -332,9 +471,14 @@ class MainActivity : ComponentActivity() {
                     conversationViewModel = conversationViewModel,
                     modelConfigurationViewModel = modelConfigurationViewModel,
                     modelApiKeyViewModel = modelApiKeyViewModel,
+                    voiceSettingsViewModel = voiceSettingsViewModel,
                     homeWeatherViewModel = homeWeatherViewModel,
+                    newsViewModel = newsViewModel,
                     familyUsageViewModel = familyUsageViewModel,
                     safetyMonitoringViewModel = safetyMonitoringViewModel,
+                    guiTaskController = guiTaskManager,
+                    guiTargetAppLauncher = guiTargetAppLauncher,
+                    onElderModeActiveChanged = voiceCoordinator::setElderModeActive,
                 )
             }
         }
