@@ -59,7 +59,7 @@ class FamilyCommandScreenTest {
         }
 
         composeRule.onNodeWithText("为王阿姨创建提醒").assertIsDisplayed()
-        composeRule.onNodeWithText("日期").assertIsDisplayed()
-        composeRule.onNodeWithText("时间").assertIsDisplayed()
+        composeRule.onNodeWithText("截止日期：2026-07-17").assertIsDisplayed()
+        composeRule.onNodeWithText("截止时间：08:30").assertIsDisplayed()
     }
 }

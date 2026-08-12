@@ -22,11 +22,12 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.automirrored.rounded.Article
+import androidx.compose.material.icons.rounded.Cancel
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.FamilyRestroom
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.ShoppingBag
-import androidx.compose.material.icons.rounded.Sos
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.silverageassistant.ui.components.ElderScreenScaffold
 import com.example.silverageassistant.ui.onboarding.SessionConnectionStatus
+import com.example.silverageassistant.ui.reminders.ReminderItemUi
 import com.example.silverageassistant.ui.theme.ElderSpacing
 import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
 import java.time.LocalDate
@@ -68,9 +70,7 @@ import kotlin.math.roundToInt
 
 data class HomeAction(
     val title: String,
-    val subtitle: String,
     val icon: ImageVector,
-    val isEmergency: Boolean = false,
     val onClick: () -> Unit,
 )
 
@@ -78,14 +78,13 @@ data class HomeAction(
 fun ElderHomeRoute(
     onConversation: () -> Unit,
     onReminders: () -> Unit,
-    onLifeAssistant: () -> Unit,
     onFamilyContacts: () -> Unit,
     onNews: () -> Unit,
-    onSos: () -> Unit,
     onSettings: () -> Unit,
     elderName: String,
     sessionConnectionStatus: SessionConnectionStatus,
     sessionMessage: String?,
+    todayReminders: List<ReminderItemUi>,
     weatherViewModel: HomeWeatherViewModel,
     modifier: Modifier = Modifier,
 ) {
@@ -123,15 +122,14 @@ fun ElderHomeRoute(
     ElderHomeScreen(
         onConversation = onConversation,
         onReminders = onReminders,
-        onLifeAssistant = onLifeAssistant,
         onFamilyContacts = onFamilyContacts,
         onNews = onNews,
-        onSos = onSos,
         onSettings = onSettings,
         modifier = modifier,
         elderName = elderName,
         sessionConnectionStatus = sessionConnectionStatus,
         sessionMessage = sessionMessage,
+        todayReminders = todayReminders,
         weatherState = weatherState,
         onWeatherAction = requestOrRefreshWeather,
     )
@@ -141,28 +139,42 @@ fun ElderHomeRoute(
 fun ElderHomeScreen(
     onConversation: () -> Unit,
     onReminders: () -> Unit,
-    onLifeAssistant: () -> Unit,
     onFamilyContacts: () -> Unit,
     onNews: () -> Unit,
-    onSos: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
     elderName: String = "",
     sessionConnectionStatus: SessionConnectionStatus = SessionConnectionStatus.Unknown,
     sessionMessage: String? = null,
+    todayReminders: List<ReminderItemUi> = emptyList(),
     weatherState: HomeWeatherUiState = HomeWeatherUiState(),
     onWeatherAction: () -> Unit = {},
 ) {
     val formattedDate = remember {
         LocalDate.now().format(DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.CHINA))
     }
+    var showBindingStatusDialog by rememberSaveable { mutableStateOf(false) }
+    val bindingIsHealthy = sessionConnectionStatus == SessionConnectionStatus.Online
+    val bindingStatusTitle = when (sessionConnectionStatus) {
+        SessionConnectionStatus.Syncing -> "正在确认家人绑定"
+        SessionConnectionStatus.Online -> "家人绑定正常"
+        SessionConnectionStatus.Offline -> "当前无法连接服务"
+        SessionConnectionStatus.Invalid -> "家人绑定已失效"
+        SessionConnectionStatus.Unknown -> "暂时无法确认家人绑定"
+    }
+    val bindingStatusDetail = sessionMessage ?: when (sessionConnectionStatus) {
+        SessionConnectionStatus.Syncing -> "正在向中台确认绑定状态，请稍等。"
+        SessionConnectionStatus.Online -> "老人端与家属端的绑定信息有效。"
+        SessionConnectionStatus.Offline -> "请检查网络，恢复连接后系统会再次确认。"
+        SessionConnectionStatus.Invalid -> "请联系家属重新完成绑定。"
+        SessionConnectionStatus.Unknown -> "系统尚未取得绑定状态，请稍后再查看。"
+    }
+    val latestReminder = todayReminders.maxByOrNull(ReminderItemUi::eventTimeEpochMillis)
     val actions = listOf(
-        HomeAction("和我说话", "问问题、聊聊天", Icons.AutoMirrored.Rounded.Chat, onClick = onConversation),
-        HomeAction("今日提醒", "查看今天要做的事", Icons.Rounded.NotificationsActive, onClick = onReminders),
-        HomeAction("生活助手", "购物、出行和查询", Icons.Rounded.ShoppingBag, onClick = onLifeAssistant),
-        HomeAction("联系家人", "给家人打电话", Icons.Rounded.FamilyRestroom, onClick = onFamilyContacts),
-        HomeAction("新闻播报", "查看今日热点新闻", Icons.AutoMirrored.Rounded.Article, onClick = onNews),
-        HomeAction("紧急求助", "需要帮助时按这里", Icons.Rounded.Sos, isEmergency = true, onClick = onSos),
+        HomeAction("和我说话", Icons.AutoMirrored.Rounded.Chat, onClick = onConversation),
+        HomeAction("今日提醒", Icons.Rounded.NotificationsActive, onClick = onReminders),
+        HomeAction("联系家人", Icons.Rounded.FamilyRestroom, onClick = onFamilyContacts),
+        HomeAction("新闻播报", Icons.AutoMirrored.Rounded.Article, onClick = onNews),
     )
 
     ElderScreenScaffold(
@@ -186,36 +198,43 @@ fun ElderHomeScreen(
                     .fillMaxSize()
                     .padding(horizontal = ElderSpacing.medium),
             ) {
-                Text(
-                    text = formattedDate,
-                    style = MaterialTheme.typography.headlineMedium,
-                    modifier = Modifier.semantics { heading() },
-                )
-                Spacer(modifier = Modifier.height(ElderSpacing.small))
-                if (sessionConnectionStatus != SessionConnectionStatus.Unknown) {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.large,
-                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = formattedDate,
+                        style = MaterialTheme.typography.headlineMedium,
+                        modifier = Modifier
+                            .weight(1f)
+                            .semantics { heading() },
+                    )
+                    IconButton(
+                        onClick = { showBindingStatusDialog = true },
+                        modifier = Modifier.size(56.dp),
                     ) {
-                        Column(modifier = Modifier.padding(ElderSpacing.medium)) {
-                            Text(
-                                text = when (sessionConnectionStatus) {
-                                    SessionConnectionStatus.Syncing -> "正在确认家人绑定"
-                                    SessionConnectionStatus.Online -> "家人绑定正常"
-                                    SessionConnectionStatus.Offline -> "暂时离线"
-                                    SessionConnectionStatus.Invalid -> "家人绑定已失效"
-                                    SessionConnectionStatus.Unknown -> ""
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                            if (sessionMessage != null) {
-                                Text(sessionMessage, style = MaterialTheme.typography.bodyLarge)
-                            }
-                        }
+                        Icon(
+                            imageVector = if (bindingIsHealthy) {
+                                Icons.Rounded.CheckCircle
+                            } else {
+                                Icons.Rounded.Cancel
+                            },
+                            contentDescription = if (bindingIsHealthy) {
+                                "家人绑定正常，点击查看详情"
+                            } else {
+                                "家人绑定异常，点击查看详情"
+                            },
+                            modifier = Modifier.size(36.dp),
+                            tint = if (bindingIsHealthy) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                        )
                     }
-                    Spacer(modifier = Modifier.height(ElderSpacing.small))
                 }
+                Spacer(modifier = Modifier.height(ElderSpacing.small))
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,
@@ -240,10 +259,27 @@ fun ElderHomeScreen(
                             text = "最近提醒",
                             style = MaterialTheme.typography.titleMedium,
                         )
-                        Text(
-                            text = "上午 8:00 服药",
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
+                        if (latestReminder == null) {
+                            Text(
+                                text = "当前没有提醒",
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                        } else {
+                            Text(
+                                text = "${latestReminder.time} ${latestReminder.title}",
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (latestReminder.detail.isNotBlank()) {
+                                Text(
+                                    text = latestReminder.detail,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                     }
                 }
                 Spacer(modifier = Modifier.height(ElderSpacing.medium))
@@ -259,6 +295,19 @@ fun ElderHomeScreen(
                 }
             }
         }
+    }
+
+    if (showBindingStatusDialog) {
+        AlertDialog(
+            onDismissRequest = { showBindingStatusDialog = false },
+            title = { Text(bindingStatusTitle) },
+            text = { Text(bindingStatusDetail) },
+            confirmButton = {
+                TextButton(onClick = { showBindingStatusDialog = false }) {
+                    Text("知道了")
+                }
+            },
+        )
     }
 }
 
@@ -356,24 +405,16 @@ private fun HomeWeatherSummary(
 
 @Composable
 private fun HomeActionCard(action: HomeAction) {
-    val containerColor = if (action.isEmergency) {
-        MaterialTheme.colorScheme.errorContainer
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
-    val contentColor = if (action.isEmergency) {
-        MaterialTheme.colorScheme.onErrorContainer
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .defaultMinSize(minHeight = 154.dp)
-            .semantics { contentDescription = "${action.title}，${action.subtitle}" }
+            .defaultMinSize(minHeight = 112.dp)
+            .semantics { contentDescription = action.title }
             .clickable(onClickLabel = "打开${action.title}", onClick = action.onClick),
-        colors = CardDefaults.cardColors(containerColor = containerColor, contentColor = contentColor),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
         Column(
@@ -387,17 +428,12 @@ private fun HomeActionCard(action: HomeAction) {
                 imageVector = action.icon,
                 contentDescription = null,
                 modifier = Modifier.size(42.dp),
-                tint = if (action.isEmergency) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                tint = MaterialTheme.colorScheme.primary,
             )
             Spacer(modifier = Modifier.height(ElderSpacing.small))
             Text(
                 text = action.title,
                 style = MaterialTheme.typography.titleMedium,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                text = action.subtitle,
-                style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
         }
@@ -408,6 +444,6 @@ private fun HomeActionCard(action: HomeAction) {
 @Composable
 private fun ElderHomePreview() {
     SilverAgeAssistantTheme(darkTheme = false) {
-        ElderHomeScreen(onConversation = {}, onReminders = {}, onLifeAssistant = {}, onFamilyContacts = {}, onNews = {}, onSos = {}, onSettings = {})
+        ElderHomeScreen(onConversation = {}, onReminders = {}, onFamilyContacts = {}, onNews = {}, onSettings = {})
     }
 }

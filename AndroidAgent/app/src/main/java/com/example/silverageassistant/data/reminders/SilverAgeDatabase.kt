@@ -17,7 +17,7 @@ import com.example.silverageassistant.data.usage.ModelUsageEntity
         ModelUsageEntity::class,
         GuiTodoEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class SilverAgeDatabase : RoomDatabase() {
@@ -104,6 +104,20 @@ abstract class SilverAgeDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `reminders` ADD COLUMN `completed_at_epoch_millis` INTEGER",
+                )
+                db.execSQL(
+                    "ALTER TABLE `reminders` ADD COLUMN `completion_sync_state` TEXT NOT NULL DEFAULT 'NOT_REQUIRED'",
+                )
+                db.execSQL(
+                    "ALTER TABLE `reminders` ADD COLUMN `completion_request_id` TEXT",
+                )
+            }
+        }
+
         @Volatile
         private var instance: SilverAgeDatabase? = null
 
@@ -112,7 +126,7 @@ abstract class SilverAgeDatabase : RoomDatabase() {
                 context.applicationContext,
                 SilverAgeDatabase::class.java,
                 "silverage.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
                 .also { instance = it }
         }

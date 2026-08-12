@@ -1,5 +1,7 @@
 package com.example.silverageassistant.ui.family
 
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -12,6 +14,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.AddAlert
+import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -20,9 +24,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import com.example.silverageassistant.ui.components.ElderScreenScaffold
 import com.example.silverageassistant.ui.components.LargeActionButton
 import com.example.silverageassistant.ui.theme.ElderSpacing
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Composable
 fun FamilyNotificationRoute(
@@ -104,8 +114,8 @@ fun FamilyReminderRoute(
         elderDisplayName = elderDisplayName,
         onTitleChange = viewModel::updateReminderTitle,
         onContentChange = viewModel::updateReminderContent,
-        onDateChange = viewModel::updateReminderDate,
-        onTimeChange = viewModel::updateReminderTime,
+        onDateChange = viewModel::selectReminderDate,
+        onTimeChange = viewModel::selectReminderTime,
         onCreate = { viewModel.createReminder(elderId) },
         onBack = onBack,
     )
@@ -123,6 +133,39 @@ fun FamilyReminderScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val selectedDate = runCatching { LocalDate.parse(state.reminderDate) }
+        .getOrDefault(LocalDate.now())
+    val selectedTime = runCatching {
+        LocalTime.parse(state.reminderTime, DateTimeFormatter.ofPattern("HH:mm"))
+    }.getOrDefault(LocalTime.now().plusHours(1))
+    val showDatePicker = {
+        DatePickerDialog(
+            context,
+            { _, year, month, dayOfMonth ->
+                onDateChange(LocalDate.of(year, month + 1, dayOfMonth).toString())
+            },
+            selectedDate.year,
+            selectedDate.monthValue - 1,
+            selectedDate.dayOfMonth,
+        ).apply {
+            datePicker.minDate = LocalDate.now()
+                .atStartOfDay(ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli()
+        }.show()
+    }
+    val showTimePicker = {
+        TimePickerDialog(
+            context,
+            { _, hourOfDay, minute ->
+                onTimeChange(String.format(Locale.ROOT, "%02d:%02d", hourOfDay, minute))
+            },
+            selectedTime.hour,
+            selectedTime.minute,
+            true,
+        ).show()
+    }
     ElderScreenScaffold(title = "创建提醒", onBack = onBack, modifier = modifier) { paddingValues ->
         Column(
             modifier = Modifier
@@ -137,7 +180,7 @@ fun FamilyReminderScreen(
                 style = MaterialTheme.typography.headlineMedium,
             )
             Text(
-                text = "提醒由中台转发，老人端保存到本地后才会确认接收。",
+                text = "请设置完成事项的截止时间。老人未确认完成时，截止后每小时提醒一次。",
                 style = MaterialTheme.typography.bodyLarge,
             )
             OutlinedTextField(
@@ -158,23 +201,27 @@ fun FamilyReminderScreen(
                 minLines = 3,
                 modifier = Modifier.fillMaxWidth(),
             )
-            OutlinedTextField(
-                value = state.reminderDate,
-                onValueChange = onDateChange,
-                label = { Text("日期") },
-                supportingText = { Text("格式：2026-07-16") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+            LargeActionButton(
+                text = "截止日期：${state.reminderDate}",
+                contentDescription = "选择完成截止日期，当前为${state.reminderDate}",
+                icon = Icons.Rounded.CalendarMonth,
+                outlined = true,
+                onClick = showDatePicker,
             )
-            OutlinedTextField(
-                value = state.reminderTime,
-                onValueChange = onTimeChange,
-                label = { Text("时间") },
-                supportingText = { Text(state.reminderDateTimeError ?: "格式：08:30") },
-                isError = state.reminderDateTimeError != null,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+            LargeActionButton(
+                text = "截止时间：${state.reminderTime}",
+                contentDescription = "选择完成截止时间，当前为${state.reminderTime}",
+                icon = Icons.Rounded.Schedule,
+                outlined = true,
+                onClick = showTimePicker,
             )
+            state.reminderDateTimeError?.let { error ->
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             ResultMessage(state)
             LargeActionButton(
                 text = if (state.isSubmitting) "正在创建" else "创建提醒",

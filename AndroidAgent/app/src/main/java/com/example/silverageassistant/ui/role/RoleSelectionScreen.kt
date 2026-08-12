@@ -83,13 +83,6 @@ fun RoleSelectionScreen(
                     outlined = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(modifier = Modifier.height(ElderSpacing.large))
-                Text(
-                    text = "以后可以在设置中更改",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
             }
         }
     }

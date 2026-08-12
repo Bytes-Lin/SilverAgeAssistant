@@ -35,6 +35,31 @@ import org.junit.Test
 
 class AccessibilityGuiRunExecutorTest {
     @Test
+    fun reactRun_returnsFailureAfterFiveSteps() = runBlocking {
+        val controller = FakeController(
+            observations = ArrayDeque(
+                (1..5).map { GuiObserveResult.Captured(observation("frame-$it")) },
+            ),
+        )
+        val planner = QueuePlanner(
+            ArrayDeque(
+                (1..5).map {
+                    GuiPlannedAction.Wait(milliseconds = 0, reason = "等待页面")
+                },
+            ),
+        )
+
+        val outcome = executor(controller, planner).execute(
+            GuiRunRequest("todo-limit", "在美团搜索午餐", 1),
+            FakeControl(),
+            AgentToolRegistry(emptyList()),
+        )
+
+        assertTrue(outcome is GuiRunOutcome.Failed)
+        assertEquals(5, controller.observeCount)
+    }
+
+    @Test
     fun complexTask_observesPerActionAndCompletes() = runBlocking {
         val first = observation("frame-1")
         val second = observation("frame-2")
@@ -72,13 +97,15 @@ class AccessibilityGuiRunExecutorTest {
 
     @Test
     fun orderSubmission_requiresExplicitElderGateBeforeAuthorization() = runBlocking {
-        val first = observation("frame-confirm")
+        val first = observation("frame-open-cart")
+        val confirmation = observation("frame-confirm")
         val second = observation("frame-submit")
         val third = observation("frame-done")
         val controller = FakeController(
             ArrayDeque(
                 listOf(
                     GuiObserveResult.Captured(first),
+                    GuiObserveResult.Captured(confirmation),
                     GuiObserveResult.Captured(second),
                     GuiObserveResult.Captured(third),
                 ),
@@ -87,6 +114,10 @@ class AccessibilityGuiRunExecutorTest {
         val planner = QueuePlanner(
             ArrayDeque(
                 listOf(
+                    GuiPlannedAction.Device(
+                        GuiDeviceAction.ClickNode("frame-open-cart", "0.1"),
+                        "打开购物车",
+                    ),
                     GuiPlannedAction.AskElder(
                         "确认商品和金额后提交订单吗？",
                         GuiConfirmationScope.ORDER_SUBMISSION,
@@ -112,7 +143,8 @@ class AccessibilityGuiRunExecutorTest {
             listOf(GuiRunPhase.WAITING_ELDER_CONFIRMATION),
             control.userGates.map { it.first },
         )
-        assertTrue(controller.authorizations.single().allowOrderSubmission)
+        assertEquals(false, controller.authorizations.first().allowOrderSubmission)
+        assertTrue(controller.authorizations.last().allowOrderSubmission)
     }
 
     private fun executor(

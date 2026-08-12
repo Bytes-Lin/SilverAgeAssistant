@@ -10,8 +10,24 @@ data class AgentDeterministicToolRoute(
     val argumentsJson: String,
     val acceptedResponse: String,
     val rejectedResponse: String,
+    val resultPresenter: AgentDeterministicToolResultPresenter? = null,
 )
+
+fun interface AgentDeterministicToolResultPresenter {
+    fun present(resultJson: String): String
+}
 
 fun interface AgentDeterministicToolRouter {
     fun route(userText: String): AgentDeterministicToolRoute?
+}
+
+class CompositeAgentDeterministicToolRouter(
+    private val routers: List<AgentDeterministicToolRouter>,
+) : AgentDeterministicToolRouter {
+    override fun route(userText: String): AgentDeterministicToolRoute? {
+        routers.forEach { router ->
+            router.route(userText)?.let { return it }
+        }
+        return null
+    }
 }

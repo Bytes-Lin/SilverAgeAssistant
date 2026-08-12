@@ -22,6 +22,7 @@ class FamilySafetyRealtimeClient(
     serverBaseUrl: String,
     private val credentialStore: MiddleServerCredentialStore,
     private val onSafetyEventAvailable: () -> Unit,
+    private val onReminderStatusAvailable: () -> Unit = {},
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
     private val webSocketUrl = serverBaseUrl.toWebSocketUrl()
@@ -82,16 +83,15 @@ class FamilySafetyRealtimeClient(
     }
 
     private inner class Listener : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            dispatchConnected()
+        }
+
         override fun onMessage(webSocket: WebSocket, text: String) {
             val messageType = runCatching {
                 JSONObject(text).optString("message_type")
             }.getOrNull()
-            if (
-                messageType == SAFETY_EVENT_AVAILABLE ||
-                messageType == SAFETY_EVENT_IMAGE_AVAILABLE
-            ) {
-                runCatching(onSafetyEventAvailable)
-            }
+            dispatchMessageType(messageType)
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -105,9 +105,24 @@ class FamilySafetyRealtimeClient(
             if (this@FamilySafetyRealtimeClient.webSocket === webSocket) {
                 this@FamilySafetyRealtimeClient.webSocket = null
             }
-            // REST remains the source of truth and also refreshes an expired family session.
-            runCatching(onSafetyEventAvailable)
+            // Do not turn repeated connection failures into REST polling. A successful reconnect
+            // invokes dispatchConnected(), while returning to the foreground also reconciles data.
             scheduleReconnect()
+        }
+    }
+
+    internal fun dispatchConnected() {
+        runCatching(onSafetyEventAvailable)
+        runCatching(onReminderStatusAvailable)
+    }
+
+    internal fun dispatchMessageType(messageType: String?) {
+        when (messageType) {
+            SAFETY_EVENT_AVAILABLE,
+            SAFETY_EVENT_IMAGE_AVAILABLE,
+            -> runCatching(onSafetyEventAvailable)
+
+            REMINDER_STATUS_CHANGED -> runCatching(onReminderStatusAvailable)
         }
     }
 
@@ -126,6 +141,7 @@ class FamilySafetyRealtimeClient(
     private companion object {
         const val SAFETY_EVENT_AVAILABLE = "SAFETY_EVENT_AVAILABLE"
         const val SAFETY_EVENT_IMAGE_AVAILABLE = "SAFETY_EVENT_IMAGE_AVAILABLE"
+        const val REMINDER_STATUS_CHANGED = "REMINDER_STATUS_CHANGED"
         const val PING_INTERVAL_SECONDS = 30L
         const val RECONNECT_DELAY_MILLIS = 5_000L
     }

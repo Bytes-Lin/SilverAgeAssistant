@@ -4,6 +4,8 @@ import com.example.silverageassistant.data.middleserver.RemoteCommand
 import com.example.silverageassistant.data.middleserver.RemoteCommandType
 import java.time.Instant
 import java.time.ZoneId
+import java.nio.charset.StandardCharsets
+import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -34,6 +36,12 @@ data class StoredReminder(
     val scheduledAtEpochMillis: Long,
     val sourceDisplayName: String?,
     val status: StoredReminderStatus,
+)
+
+data class PendingReminderCompletion(
+    val commandId: String,
+    val clientRequestId: String,
+    val completedAtEpochMillis: Long,
 )
 
 data class PendingCommandAcknowledgement(
@@ -73,6 +81,12 @@ interface ReminderRepository {
 
     suspend fun updateStatus(id: String, status: StoredReminderStatus)
 
+    suspend fun pendingCompletionReports(): List<PendingReminderCompletion> = emptyList()
+
+    suspend fun markCompletionReported(commandId: String) = Unit
+
+    suspend fun rescheduleIncompleteDeadlines() = Unit
+
     suspend fun markVoiceAnnouncement(id: String, state: VoiceAnnouncementState) = Unit
 
     suspend fun pendingVoiceAnnouncements(): List<PendingVoiceAnnouncement> = emptyList()
@@ -81,12 +95,23 @@ interface ReminderRepository {
 class RoomReminderRepository(
     private val dao: ReminderDao,
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
+    private val deadlineScheduler: ReminderDeadlineScheduler = NoOpReminderDeadlineScheduler,
+    private val receivedNotifier: RemoteReminderReceivedNotifier =
+        NoOpRemoteReminderReceivedNotifier,
 ) : ReminderRepository {
     override val reminders: Flow<List<StoredReminder>> = dao.observeAll().map { entities ->
         val zone = ZoneId.systemDefault()
         val today = Instant.ofEpochMilli(nowEpochMillis()).atZone(zone).toLocalDate()
         entities.filter { entity ->
-            Instant.ofEpochMilli(entity.scheduledAtEpochMillis).atZone(zone).toLocalDate() == today
+            if (entity.status != StoredReminderStatus.COMPLETED.name) {
+                // 截止时间决定何时开始催办，不决定待办是否可见。跨时区或未来截止的
+                // 家属提醒一经可靠写入 Room，就应持续展示到老人确认完成。
+                true
+            } else {
+                entity.completedAtEpochMillis?.let { completedAt ->
+                    Instant.ofEpochMilli(completedAt).atZone(zone).toLocalDate() == today
+                } ?: false
+            }
         }.sortedWith(
             compareBy<ReminderEntity> { entity ->
                 if (entity.status == StoredReminderStatus.COMPLETED.name) 1 else 0
@@ -110,8 +135,7 @@ class RoomReminderRepository(
         }
         val voicePending = command.type == RemoteCommandType.FAMILY_NOTIFICATION &&
             voiceAnnouncementEnabled
-        val inserted = dao.insert(
-            ReminderEntity(
+        val entity = ReminderEntity(
                 id = command.commandId,
                 serverCommandId = command.commandId,
                 serverSequence = command.serverSequence,
@@ -128,6 +152,9 @@ class RoomReminderRepository(
                 storedAtEpochMillis = storedAt,
                 status = StoredReminderStatus.PENDING.name,
                 acknowledged = false,
+                completedAtEpochMillis = null,
+                completionSyncState = "NOT_REQUIRED",
+                completionRequestId = null,
                 voiceAnnouncementState = if (voicePending) {
                     VoiceAnnouncementState.PENDING.name
                 } else {
@@ -135,8 +162,12 @@ class RoomReminderRepository(
                 },
                 voiceAnnouncedAtEpochMillis = null,
                 voiceAttemptCount = 0,
-            ),
-        ) != -1L
+            )
+        val inserted = dao.insert(entity) != -1L
+        if (inserted && command.type == RemoteCommandType.REMOTE_REMINDER) {
+            receivedNotifier.show(entity)
+            deadlineScheduler.schedule(command.commandId, scheduledAt.toEpochMilli())
+        }
         return RemoteCommandSaveResult(
             inserted = inserted,
             reminderId = command.commandId,
@@ -156,7 +187,33 @@ class RoomReminderRepository(
     override suspend fun markAcknowledged(commandId: String) = dao.markAcknowledged(commandId)
 
     override suspend fun updateStatus(id: String, status: StoredReminderStatus) {
-        dao.updateStatus(id, status.name)
+        if (status == StoredReminderStatus.COMPLETED) {
+            val requestId = UUID.nameUUIDFromBytes(
+                "reminder-completed:$id".toByteArray(StandardCharsets.UTF_8),
+            ).toString()
+            dao.markCompleted(id, nowEpochMillis(), requestId)
+            deadlineScheduler.cancel(id)
+        } else {
+            dao.updateStatus(id, status.name)
+        }
+    }
+
+    override suspend fun pendingCompletionReports(): List<PendingReminderCompletion> =
+        dao.pendingCompletionReports().mapNotNull { entity ->
+            val commandId = entity.serverCommandId ?: return@mapNotNull null
+            val requestId = entity.completionRequestId ?: return@mapNotNull null
+            val completedAt = entity.completedAtEpochMillis ?: return@mapNotNull null
+            PendingReminderCompletion(commandId, requestId, completedAt)
+        }
+
+    override suspend fun markCompletionReported(commandId: String) {
+        dao.markCompletionReported(commandId)
+    }
+
+    override suspend fun rescheduleIncompleteDeadlines() {
+        dao.incompleteRemoteReminders().forEach { reminder ->
+            deadlineScheduler.schedule(reminder.id, reminder.scheduledAtEpochMillis)
+        }
     }
 
     override suspend fun markVoiceAnnouncement(id: String, state: VoiceAnnouncementState) {

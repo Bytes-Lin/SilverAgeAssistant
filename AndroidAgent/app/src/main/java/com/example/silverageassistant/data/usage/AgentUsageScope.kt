@@ -6,5 +6,6 @@ package com.example.silverageassistant.data.usage
  */
 enum class AgentUsageScope(val feature: String) {
     MAIN_CHAT("conversation"),
+    MAIN_CHAT_CONTEXT_COMPRESSION("conversation_context_compression"),
     GUI_AGENT("gui_agent"),
 }

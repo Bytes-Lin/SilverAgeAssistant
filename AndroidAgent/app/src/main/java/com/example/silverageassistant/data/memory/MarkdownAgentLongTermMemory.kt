@@ -87,21 +87,23 @@ class MarkdownAgentLongTermMemory private constructor(
                     .filter(String::isNotBlank)
                     .toMutableList()
                 val entry = "- $safeNote"
-                if (entry !in notes) notes += entry
-                writeDocument(
-                    current.replaceSection(
-                        NOTES_START,
-                        NOTES_END,
-                        notes.takeLast(MAX_NOTE_COUNT).joinToString("\n"),
-                    ),
+                if (entry in notes || notes.size >= MAX_NOTE_COUNT) return@withContext
+                val updated = current.replaceSection(
+                    NOTES_START,
+                    NOTES_END,
+                    (notes + entry).joinToString("\n"),
                 )
+                if (updated.toByteArray(Charsets.UTF_8).size > MAX_MEMORY_FILE_BYTES) {
+                    return@withContext
+                }
+                writeDocument(updated)
             }
         }
     }
 
     override suspend fun markdownForPrompt(): String = mutex.withLock {
         withContext(Dispatchers.IO) {
-            ensureDocument().take(MAX_PROMPT_MEMORY_LENGTH)
+            ensureDocument()
         }
     }
 
@@ -170,6 +172,7 @@ class MarkdownAgentLongTermMemory private constructor(
     """.trimIndent() + "\n"
 
     private fun writeDocument(content: String) {
+        if (content.toByteArray(Charsets.UTF_8).size > MAX_MEMORY_FILE_BYTES) return
         memoryFile.parentFile?.mkdirs()
         val withUpdatedAt = content.replace(
             UPDATED_AT_REGEX,
@@ -233,7 +236,7 @@ class MarkdownAgentLongTermMemory private constructor(
         const val NOTES_END = "<!-- memories:end -->"
         const val MAX_NOTE_LENGTH = 300
         const val MAX_NOTE_COUNT = 100
-        const val MAX_PROMPT_MEMORY_LENGTH = 8_000
+        const val MAX_MEMORY_FILE_BYTES = 24_000
         val UPDATED_AT_REGEX = Regex("<!-- 最近更新：.*? -->")
         val REQUIRED_MARKERS = listOf(
             ELDER_START,

@@ -11,6 +11,7 @@ import com.example.silverageassistant.data.middleserver.SafetyEventSeverity
 import com.example.silverageassistant.data.middleserver.ElderSafetyMonitoringRepository
 import com.example.silverageassistant.data.safety.SafetyMonitoringConfiguration
 import com.example.silverageassistant.data.safety.SafetyMonitoringConfigurationStore
+import com.example.silverageassistant.data.safety.FamilyEmergencyNotifier
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -45,6 +46,10 @@ data class SafetyMonitoringUiState(
     val emergencyEvents: List<SafetyEvent>
         get() = events.filter { it.severity == SafetyEventSeverity.EMERGENCY }
 
+    /** Latest unresolved emergency, matching the middle server's descending event order. */
+    val latestEmergencyEvent: SafetyEvent?
+        get() = emergencyEvents.firstOrNull()
+
     val pendingEmergencyAlert: SafetyEvent?
         get() = emergencyEvents.firstOrNull {
             it.acknowledgedAt == null && it.eventId !in locallyDismissedEmergencyIds
@@ -61,6 +66,7 @@ class SafetyMonitoringViewModel(
     private val store: SafetyMonitoringConfigurationStore,
     private val familyRepository: FamilySafetyMonitoringRepository? = null,
     private val elderRepository: ElderSafetyMonitoringRepository? = null,
+    private val emergencyNotifier: FamilyEmergencyNotifier? = null,
     externalScope: CoroutineScope? = null,
 ) : ViewModel() {
     private val workScope = externalScope ?: viewModelScope
@@ -73,6 +79,7 @@ class SafetyMonitoringViewModel(
     private var elderSyncJob: Job? = null
     private var elderSyncPending = false
     private var pendingConfigurationRequestId: String? = null
+    private val notifiedEmergencyIds = mutableSetOf<String>()
 
     init {
         workScope.launch {
@@ -167,6 +174,16 @@ class SafetyMonitoringViewModel(
                             eventsMessage = null,
                         )
                     }
+                    sorted.asSequence()
+                        .filter { it.severity == SafetyEventSeverity.EMERGENCY }
+                        .filter { it.resolvedAt == null }
+                        .filter { it.acknowledgedAt == null }
+                        .filterNot { it.eventId in notifiedEmergencyIds }
+                        .forEach { event ->
+                            if (emergencyNotifier?.show(event) == true) {
+                                notifiedEmergencyIds += event.eventId
+                            }
+                        }
                     sorted.filter(SafetyEvent::imageAvailable).forEach { event ->
                         if (event.eventId !in _uiState.value.eventThumbnails) {
                             runCatching {
@@ -383,11 +400,17 @@ class SafetyMonitoringViewModel(
         private val store: SafetyMonitoringConfigurationStore,
         private val familyRepository: FamilySafetyMonitoringRepository?,
         private val elderRepository: ElderSafetyMonitoringRepository?,
+        private val emergencyNotifier: FamilyEmergencyNotifier? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(SafetyMonitoringViewModel::class.java))
-            return SafetyMonitoringViewModel(store, familyRepository, elderRepository) as T
+            return SafetyMonitoringViewModel(
+                store,
+                familyRepository,
+                elderRepository,
+                emergencyNotifier,
+            ) as T
         }
     }
 

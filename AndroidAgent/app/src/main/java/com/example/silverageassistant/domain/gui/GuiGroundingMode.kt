@@ -18,14 +18,14 @@ object GuiDebugSettings {
     private val mutableGroundingMode = MutableStateFlow(GuiGroundingMode.HYBRID_NODE_FIRST)
     val groundingMode: StateFlow<GuiGroundingMode> = mutableGroundingMode.asStateFlow()
 
-    fun currentGroundingMode(): GuiGroundingMode = if (BuildConfig.DEBUG) {
+    fun currentGroundingMode(): GuiGroundingMode = if (BuildConfig.GUI_DEBUG_ENABLED) {
         mutableGroundingMode.value
     } else {
         GuiGroundingMode.HYBRID_NODE_FIRST
     }
 
     fun setGroundingMode(mode: GuiGroundingMode) {
-        if (!BuildConfig.DEBUG || mutableGroundingMode.value == mode) return
+        if (!BuildConfig.GUI_DEBUG_ENABLED || mutableGroundingMode.value == mode) return
         mutableGroundingMode.value = mode
         GuiDebugTrace.record(
             source = "settings",

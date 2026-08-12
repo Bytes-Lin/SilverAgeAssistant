@@ -8,6 +8,7 @@ import com.example.silverageassistant.data.middleserver.SafetyEventSeverity
 import com.example.silverageassistant.data.middleserver.SafetyEventType
 import com.example.silverageassistant.data.safety.SafetyMonitoringConfiguration
 import com.example.silverageassistant.data.safety.SafetyMonitoringConfigurationStore
+import com.example.silverageassistant.data.safety.FamilyEmergencyNotifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,6 +18,52 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SafetyMonitoringViewModelTest {
+    @Test
+    fun refreshEvents_notifiesEachUnacknowledgedEmergencyOnlyOnce() {
+        val event = emergencyEvent().copy(acknowledgedAt = null)
+        val notified = mutableListOf<String>()
+        val viewModel = SafetyMonitoringViewModel(
+            store = FakeConfigurationStore(),
+            familyRepository = FakeFamilyRepository(events = listOf(event)),
+            emergencyNotifier = FamilyEmergencyNotifier {
+                notified += it.eventId
+                true
+            },
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        viewModel.loadForFamily("elder-1")
+        viewModel.refreshCurrentEvents()
+
+        assertEquals(listOf(event.eventId), notified)
+    }
+
+    @Test
+    fun latestEmergencyEvent_usesNewestEmergencyAndIgnoresGeneralEvents() {
+        val olderEmergency = emergencyEvent().copy(
+            eventId = "event-old",
+            occurredAt = "2026-08-03T06:26:00Z",
+        )
+        val newerEmergency = emergencyEvent().copy(
+            eventId = "event-new",
+            serverSequence = 3,
+            occurredAt = "2026-08-03T08:26:00Z",
+        )
+        val newerGeneral = emergencyEvent().copy(
+            eventId = "event-general",
+            serverSequence = 4,
+            occurredAt = "2026-08-03T09:26:00Z",
+            severity = SafetyEventSeverity.GENERAL,
+        )
+        val viewModel = viewModel(
+            FakeFamilyRepository(events = listOf(olderEmergency, newerGeneral, newerEmergency)),
+        )
+
+        viewModel.loadForFamily("elder-1")
+
+        assertEquals("event-new", viewModel.uiState.value.latestEmergencyEvent?.eventId)
+    }
+
     @Test
     fun clearEmergency_resolvesOnServerAndRemovesCard() {
         val event = emergencyEvent()

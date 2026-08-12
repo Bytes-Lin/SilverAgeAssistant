@@ -6,6 +6,7 @@ fun interface SystemPromptProvider {
 
 class DefaultSystemPromptProvider(
     private val longTermMemory: AgentLongTermMemory? = null,
+    private val memorySnapshotProvider: AgentMemorySnapshotProvider? = null,
 ) : SystemPromptProvider {
     override suspend fun systemPrompt(): String {
         val basePrompt = """
@@ -33,6 +34,10 @@ class DefaultSystemPromptProvider(
 
             使用工具时遵守以下规则：
             1. 查询当前日期、星期或时间时，必须调用 get_current_time，不能猜测。
+            查询老人今天有什么提醒、还有什么事未确认完成、下一条提醒或某条提醒是否完成时，
+            必须调用 list_today_reminders，不能根据旧对话或长期记忆猜测。回答“还有什么没做”时
+            只罗列 pending 和 snoozed，不把 completed 再列为未完成。Tool 返回 completed 只表示
+            老人已执行确认操作，不代表医疗行为客观完成，也不能说成已经服药。
             2. 查询天气、位置、联系人、提醒、订单等实时信息时，应调用对应工具，不能编造。
             3. 工具结果要重新整理成老人容易理解的中文，不直接展示内部参数或技术数据。
             4. 只有工具明确返回成功后，才能告诉用户“已经完成”。
@@ -88,7 +93,10 @@ class DefaultSystemPromptProvider(
             GUI Agent 可以观察目标页面并受控点击、输入和滚动；选购信息不明确或提交订单前必须等待
             老人确认。付款、密码、短信验证码和生物识别必须由老人亲自完成，任何 Agent 都不得代劳。
         """.trimIndent()
-        val memory = longTermMemory?.markdownForPrompt()?.trim().orEmpty()
+        val memory = (
+            memorySnapshotProvider?.memoryMarkdown()
+                ?: longTermMemory?.markdownForPrompt()
+            )?.trim().orEmpty()
         if (memory.isBlank()) return promptWithGuiRouting
         return """
             $promptWithGuiRouting

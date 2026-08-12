@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 enum class GuiRunPhase {
     RUNNING,
@@ -88,6 +90,12 @@ interface GuiRunControl {
         phase: GuiRunPhase,
         statusMessage: String,
     )
+
+    /**
+     * 取得老人通过 GUI 控制条补充的最近一条语音文本。文本只进入当前 GuiRun 的短期历史，
+     * 不写入 Todo、Room、长期记忆或日志。
+     */
+    suspend fun consumeVoiceInput(): String? = null
 }
 
 internal class MutableGuiRunControl(
@@ -95,6 +103,8 @@ internal class MutableGuiRunControl(
 ) : GuiRunControl {
     private val mutablePermission = MutableStateFlow(GuiRunPermission.RUNNING)
     override val permission: StateFlow<GuiRunPermission> = mutablePermission.asStateFlow()
+    private val voiceInputMutex = Mutex()
+    private var pendingVoiceInput: String? = null
 
     override suspend fun awaitRunning() {
         when (
@@ -139,6 +149,16 @@ internal class MutableGuiRunControl(
         reportPhase(phase, statusMessage)
         pause()
         awaitRunning()
+    }
+
+    override suspend fun consumeVoiceInput(): String? = voiceInputMutex.withLock {
+        pendingVoiceInput.also { pendingVoiceInput = null }
+    }
+
+    suspend fun submitVoiceInput(transcript: String) {
+        voiceInputMutex.withLock {
+            pendingVoiceInput = transcript
+        }
     }
 
     fun pause() {

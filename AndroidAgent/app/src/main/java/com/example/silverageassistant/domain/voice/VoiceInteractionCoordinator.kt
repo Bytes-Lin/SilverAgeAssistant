@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.job
@@ -23,11 +24,13 @@ class VoiceInteractionCoordinator(
     private val applicationScope: CoroutineScope,
 ) {
     private val elderModeActive = MutableStateFlow(false)
+    private val guiAgentActive = MutableStateFlow(false)
     val enabled: StateFlow<Boolean> = combine(
         settingsStore.enabled,
         elderModeActive,
-    ) { storedEnabled, isElderMode ->
-        storedEnabled && isElderMode
+        guiAgentActive,
+    ) { storedEnabled, isElderMode, isGuiAgentActive ->
+        storedEnabled && (isElderMode || isGuiAgentActive)
     }.stateIn(
         applicationScope,
         SharingStarted.Eagerly,
@@ -43,9 +46,25 @@ class VoiceInteractionCoordinator(
     private val speechMutex = Mutex()
     private var speechJob: Job? = null
 
+    init {
+        applicationScope.launch {
+            enabled.collect { isEnabled ->
+                if (!isEnabled) {
+                    asrProvider.cancelListening()
+                    stopSpeaking()
+                }
+            }
+        }
+    }
+
     fun setElderModeActive(active: Boolean) {
         elderModeActive.value = active
-        if (!active) stopAll()
+        if (!active && !guiAgentActive.value) stopAll()
+    }
+
+    fun setGuiAgentActive(active: Boolean) {
+        guiAgentActive.value = active
+        if (!active && !elderModeActive.value) stopAll()
     }
 
     suspend fun startConversationRecording(correlationId: String) {
@@ -65,6 +84,53 @@ class VoiceInteractionCoordinator(
 
     suspend fun cancelConversationRecording() {
         asrProvider.cancelListening()
+    }
+
+    suspend fun startGuiAgentRecording(correlationId: String) {
+        check(enabled.value) { "语音交互开关尚未开启" }
+        errorState.value = null
+        stopSpeaking()
+        asrProvider.startListening(
+            VoiceRequestContext(
+                feature = VoiceFeature.GUI_AGENT,
+                correlationId = correlationId,
+                priority = VoicePriority.USER_RECORDING,
+            ),
+        )
+    }
+
+    suspend fun stopGuiAgentRecording(): AgentAsrResult = asrProvider.stopListening()
+
+    suspend fun cancelGuiAgentRecording() {
+        asrProvider.cancelListening()
+    }
+
+    /**
+     * GUI 普通步骤只播报下一步要做什么，不播报坐标、节点、frame_id、重试或执行结果。
+     * 商品、订单和付款确认由 [speakGuiAgentConfirmation] 使用更长的文本上限单独播报。
+     */
+    fun speakGuiAgentStep(correlationId: String, instruction: String) {
+        val text = instruction.toVoiceText(MAX_GUI_STEP_SPEECH_LENGTH)
+        speak(
+            VoiceRequestContext(
+                feature = VoiceFeature.GUI_AGENT,
+                correlationId = correlationId,
+                priority = VoicePriority.CONVERSATION,
+            ),
+            text,
+        )
+    }
+
+    fun speakGuiAgentConfirmation(correlationId: String, details: String) {
+        val text = details.toVoiceText(MAX_GUI_CONFIRMATION_SPEECH_LENGTH)
+        speak(
+            VoiceRequestContext(
+                feature = VoiceFeature.GUI_AGENT,
+                correlationId = correlationId,
+                priority = VoicePriority.CONVERSATION,
+            ),
+            text,
+        )
     }
 
     fun speak(context: VoiceRequestContext, text: String) {
@@ -111,5 +177,15 @@ class VoiceInteractionCoordinator(
             asrProvider.cancelListening()
             stopSpeaking()
         }
+    }
+
+    private fun String.toVoiceText(maxLength: Int): String =
+        replace(Regex("\\s+"), " ")
+            .trim()
+            .take(maxLength)
+
+    private companion object {
+        const val MAX_GUI_STEP_SPEECH_LENGTH = 80
+        const val MAX_GUI_CONFIRMATION_SPEECH_LENGTH = 300
     }
 }

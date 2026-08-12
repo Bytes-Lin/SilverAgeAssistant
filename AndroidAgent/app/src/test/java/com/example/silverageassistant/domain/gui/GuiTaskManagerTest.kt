@@ -203,6 +203,35 @@ class GuiTaskManagerTest {
         assertEquals(GuiTodoStatus.INTERRUPTED, repository.get(todoId)?.status)
     }
 
+    @Test
+    fun guiVoiceInput_isDeliveredToCurrentRunWithoutChangingTodoContent() = runBlocking {
+        val repository = FakeGuiTodoRepository()
+        val executorStarted = CompletableDeferred<Unit>()
+        val continueExecutor = CompletableDeferred<Unit>()
+        val received = CompletableDeferred<String?>()
+        val manager = manager(
+            repository = repository,
+            scope = this,
+            executor = GuiRunExecutor { _, control, _ ->
+                executorStarted.complete(Unit)
+                continueExecutor.await()
+                control.awaitRunning()
+                received.complete(control.consumeVoiceInput())
+                GuiRunOutcome.Completed
+            },
+        )
+
+        val start = manager.startTask("在美团选择午餐") as GuiTaskStartResult.Accepted
+        executorStarted.await()
+        assertTrue(manager.beginVoiceInput() is GuiTaskControlResult.Updated)
+        continueExecutor.complete(Unit)
+        assertTrue(manager.submitVoiceInput("  想要少辣的  ") is GuiTaskControlResult.Updated)
+
+        assertEquals("想要少辣的", received.await())
+        manager.activeTask.first { it?.phase == GuiRunPhase.COMPLETED }
+        assertEquals("在美团选择午餐", repository.get(start.snapshot.todoId)?.content)
+    }
+
     private fun manager(
         repository: GuiTodoRepository,
         scope: CoroutineScope,

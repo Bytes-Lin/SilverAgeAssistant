@@ -11,6 +11,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.UUID
@@ -39,9 +40,17 @@ data class FamilyCommunicationUiState(
 class FamilyCommunicationViewModel(
     private val repository: FamilyCommunicationRepository? = null,
     externalScope: CoroutineScope? = null,
+    private val now: () -> ZonedDateTime = { ZonedDateTime.now() },
 ) : ViewModel() {
     private val workScope = externalScope ?: viewModelScope
-    private val _uiState = MutableStateFlow(FamilyCommunicationUiState())
+    private val initialReminderSchedule = now().plusHours(1)
+    private val _uiState = MutableStateFlow(
+        FamilyCommunicationUiState(
+            reminderDate = initialReminderSchedule.toLocalDate().toString(),
+            reminderTime = initialReminderSchedule.toLocalTime()
+                .format(DateTimeFormatter.ofPattern("HH:mm")),
+        ),
+    )
     val uiState: StateFlow<FamilyCommunicationUiState> = _uiState.asStateFlow()
     private var pendingNotificationRequestId: String? = null
     private var pendingNotificationCreatedAt: String? = null
@@ -95,6 +104,35 @@ class FamilyCommunicationViewModel(
         _uiState.update {
             it.copy(reminderTime = value.take(5), reminderDateTimeError = null, resultMessage = null)
         }
+    }
+
+    fun selectReminderDate(value: String) {
+        val selectedDate = runCatching {
+            LocalDate.parse(value, DateTimeFormatter.ISO_LOCAL_DATE)
+        }.getOrNull() ?: return
+        val current = now()
+        if (selectedDate.isBefore(current.toLocalDate())) {
+            _uiState.update { it.copy(reminderDateTimeError = "截止日期不能早于今天") }
+            return
+        }
+        updateReminderDate(value)
+        val candidate = parseSchedule(value, _uiState.value.reminderTime).getOrNull()
+        if (candidate != null && !candidate.toInstant().isAfter(current.toInstant())) {
+            _uiState.update { it.copy(reminderDateTimeError = "今天请选择晚于当前时间的截止时刻") }
+        }
+    }
+
+    fun selectReminderTime(value: String) {
+        val candidate = parseSchedule(_uiState.value.reminderDate, value).getOrNull()
+        if (candidate == null) {
+            _uiState.update { it.copy(reminderDateTimeError = "请选择有效时间") }
+            return
+        }
+        if (!candidate.toInstant().isAfter(now().toInstant())) {
+            _uiState.update { it.copy(reminderDateTimeError = "截止时间必须晚于当前时间") }
+            return
+        }
+        updateReminderTime(value)
     }
 
     fun sendNotification(elderId: String?): Boolean {
@@ -152,7 +190,7 @@ class FamilyCommunicationViewModel(
         val contentError = if (content.isBlank()) "请填写提醒内容" else null
         val dateTimeError = when {
             scheduled.isFailure -> "日期和时间格式应为 2026-07-16、08:30"
-            !scheduled.getOrThrow().toInstant().isAfter(Instant.now()) -> "提醒时间应晚于现在"
+            !scheduled.getOrThrow().toInstant().isAfter(now().toInstant()) -> "截止时间应晚于现在"
             else -> null
         }
         _uiState.update {
@@ -207,7 +245,7 @@ class FamilyCommunicationViewModel(
         } catch (error: DateTimeParseException) {
             throw error
         }
-        localDate.atTime(localTime).atZone(ZoneId.systemDefault())
+        localDate.atTime(localTime).atZone(now().zone)
     }
 
     private fun requireElderId(elderId: String?): String? {

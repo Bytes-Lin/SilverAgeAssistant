@@ -9,6 +9,7 @@ import com.example.silverageassistant.domain.weather.DailyWeather
 import com.example.silverageassistant.domain.weather.WeatherSnapshot
 import com.example.silverageassistant.ui.home.ElderHomeScreen
 import com.example.silverageassistant.ui.home.HomeWeatherUiState
+import com.example.silverageassistant.ui.reminders.ReminderItemUi
 import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
 import java.time.Instant
 import java.time.LocalDate
@@ -27,11 +28,18 @@ class ElderHomeWeatherScreenTest {
                     ElderHomeScreen(
                         onConversation = {},
                         onReminders = {},
-                        onLifeAssistant = {},
                         onFamilyContacts = {},
-                        onMusic = {},
-                        onSos = {},
+                        onNews = {},
                         onSettings = {},
+                        todayReminders = listOf(
+                            ReminderItemUi(
+                                id = "family-notification",
+                                eventTimeEpochMillis = 2L,
+                                time = "下午 3:30",
+                                title = "家人通知",
+                                detail = "今晚一起回家吃饭。",
+                            ),
+                        ),
                         weatherState = HomeWeatherUiState(snapshot = weatherSnapshot()),
                     )
                 }
@@ -43,7 +51,28 @@ class ElderHomeWeatherScreenTest {
         composeRule.onNodeWithText("明天 中雨  24～32℃").assertIsDisplayed()
         composeRule.onNodeWithText("后天 多云  25～33℃").assertIsDisplayed()
         composeRule.onNodeWithText("最近提醒").assertIsDisplayed()
-        composeRule.onNodeWithText("上午 8:00 服药").assertIsDisplayed()
+        composeRule.onNodeWithText("下午 3:30 家人通知").assertIsDisplayed()
+        composeRule.onNodeWithText("今晚一起回家吃饭。").assertIsDisplayed()
+    }
+
+    @Test
+    fun noTodayReminders_showsEmptyMessage() {
+        composeRule.runOnUiThread {
+            composeRule.activity.setContent {
+                SilverAgeAssistantTheme {
+                    ElderHomeScreen(
+                        onConversation = {},
+                        onReminders = {},
+                        onFamilyContacts = {},
+                        onNews = {},
+                        onSettings = {},
+                        todayReminders = emptyList(),
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("当前没有提醒").assertIsDisplayed()
     }
 
     private fun weatherSnapshot() = WeatherSnapshot(

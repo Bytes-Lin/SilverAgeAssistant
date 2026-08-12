@@ -31,6 +31,8 @@ import com.example.silverageassistant.ui.family.FamilyHomeScreen
 import com.example.silverageassistant.ui.family.FamilyCommunicationViewModel
 import com.example.silverageassistant.ui.family.FamilyNotificationRoute
 import com.example.silverageassistant.ui.family.FamilyReminderRoute
+import com.example.silverageassistant.ui.family.FamilyReminderHistoryRoute
+import com.example.silverageassistant.ui.family.FamilyReminderHistoryViewModel
 import com.example.silverageassistant.ui.home.ElderHomeRoute
 import com.example.silverageassistant.ui.home.ElderHomeScreen
 import com.example.silverageassistant.ui.home.HomeWeatherViewModel
@@ -70,6 +72,7 @@ fun SilverAgeApp(
     navController: NavHostController = rememberNavController(),
     onboardingViewModel: OnboardingViewModel = viewModel(),
     familyCommunicationViewModel: FamilyCommunicationViewModel = viewModel(),
+    familyReminderHistoryViewModel: FamilyReminderHistoryViewModel? = null,
     familyContactsViewModel: FamilyContactsViewModel = viewModel(),
     reminderViewModel: ReminderViewModel = viewModel(),
     conversationViewModel: ConversationViewModel = viewModel(),
@@ -85,6 +88,7 @@ fun SilverAgeApp(
     onElderModeActiveChanged: (Boolean) -> Unit = {},
 ) {
     val onboardingState by onboardingViewModel.uiState.collectAsState()
+    val todayReminders by reminderViewModel.reminders.collectAsState()
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = currentBackStackEntry?.destination?.route
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -99,6 +103,27 @@ fun SilverAgeApp(
                 }
                 Lifecycle.Event.ON_STOP -> onElderModeActiveChanged(false)
                 else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    DisposableEffect(
+        lifecycleOwner,
+        onboardingState.hasDeviceCredential,
+        onboardingState.hasFamilySession,
+        onboardingState.familyElderId,
+    ) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                onboardingViewModel.refreshCurrentSession()
+                if (onboardingState.hasDeviceCredential) {
+                    reminderViewModel.syncRemoteCommands()
+                }
+                if (onboardingState.hasFamilySession) {
+                    familyReminderHistoryViewModel?.refresh(onboardingState.familyElderId)
+                    safetyMonitoringViewModel?.refreshCurrentEvents()
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -120,12 +145,30 @@ fun SilverAgeApp(
         )
         return
     }
+    LaunchedEffect(onboardingState.startupDestination, currentRoute) {
+        if (
+            onboardingState.startupDestination == StartupDestination.RoleSelection &&
+            currentRoute != null &&
+            currentRoute != AppDestination.RoleSelection.route
+        ) {
+            navController.navigate(AppDestination.RoleSelection.route) {
+                popUpTo(navController.graph.id) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
     LaunchedEffect(onboardingState.hasDeviceCredential) {
         if (onboardingState.hasDeviceCredential) {
             reminderViewModel.syncRemoteCommands()
             familyContactsViewModel.syncContacts()
             modelConfigurationViewModel?.syncElderConfiguration()
             safetyMonitoringViewModel?.syncElderConfiguration()
+        }
+    }
+    LaunchedEffect(onboardingState.hasFamilySession, onboardingState.familyElderId) {
+        if (onboardingState.hasFamilySession) {
+            familyReminderHistoryViewModel?.refresh(onboardingState.familyElderId)
+            safetyMonitoringViewModel?.loadForFamily(onboardingState.familyElderId)
         }
     }
     LaunchedEffect(guiConversationRequest) {
@@ -194,26 +237,21 @@ fun SilverAgeApp(
             val onReminders = {
                 navController.navigateOnce(AppDestination.Reminders)
             }
-            val onLifeAssistant = {
-                navController.navigateOnce(AppDestination.LifeAssistant)
-            }
             val onFamilyContacts = {
                 navController.navigateOnce(AppDestination.FamilyContacts)
             }
             val onNews = { navController.navigateOnce(AppDestination.News) }
-            val onSos = { navController.navigateOnce(AppDestination.Sos) }
             val onSettings = { navController.navigateOnce(AppDestination.Settings) }
             if (homeWeatherViewModel == null) {
                 ElderHomeScreen(
                     elderName = onboardingState.elderDraft.displayName.trim(),
                     sessionConnectionStatus = onboardingState.sessionConnectionStatus,
                     sessionMessage = onboardingState.sessionMessage,
+                    todayReminders = todayReminders,
                     onConversation = onConversation,
                     onReminders = onReminders,
-                    onLifeAssistant = onLifeAssistant,
                     onFamilyContacts = onFamilyContacts,
                     onNews = onNews,
-                    onSos = onSos,
                     onSettings = onSettings,
                 )
             } else {
@@ -221,21 +259,17 @@ fun SilverAgeApp(
                     elderName = onboardingState.elderDraft.displayName.trim(),
                     sessionConnectionStatus = onboardingState.sessionConnectionStatus,
                     sessionMessage = onboardingState.sessionMessage,
+                    todayReminders = todayReminders,
                     onConversation = onConversation,
                     onReminders = onReminders,
-                    onLifeAssistant = onLifeAssistant,
                     onFamilyContacts = onFamilyContacts,
                     onNews = onNews,
-                    onSos = onSos,
                     onSettings = onSettings,
                     weatherViewModel = homeWeatherViewModel,
                 )
             }
         }
         composable(AppDestination.FamilyHome.route) {
-            LaunchedEffect(onboardingState.familyElderId) {
-                safetyMonitoringViewModel?.loadForFamily(onboardingState.familyElderId)
-            }
             FamilyHomeScreen(
                 profile = onboardingState.familyDraft,
                 bindingStatus = onboardingState.familyBindingStatus,
@@ -254,6 +288,9 @@ fun SilverAgeApp(
                 onCreateReminder = {
                     navController.navigateOnce(AppDestination.FamilyReminder)
                 },
+                onReminderHistory = {
+                    navController.navigateOnce(AppDestination.FamilyReminderHistory)
+                },
                 onModelConfiguration = {
                     navController.navigateOnce(AppDestination.FamilyModelConfiguration)
                 },
@@ -269,6 +306,11 @@ fun SilverAgeApp(
                 onEmergencyEvents = {
                     navController.navigateOnce(AppDestination.FamilyEmergencyEvents)
                 },
+                onVerifyBinding = onboardingViewModel::refreshCurrentSession,
+                latestEmergencyEvent = safetyState.latestEmergencyEvent,
+                emergencyTimeZone = safetyState.timeZone,
+                isLoadingEmergencyEvents = safetyState.isLoadingEvents,
+                emergencyEventsMessage = safetyState.eventsMessage,
             )
         }
         composable(AppDestination.FamilyNotification.route) {
@@ -286,6 +328,22 @@ fun SilverAgeApp(
                 onBack = { navController.popBackStack() },
                 viewModel = familyCommunicationViewModel,
             )
+        }
+        composable(AppDestination.FamilyReminderHistory.route) {
+            if (familyReminderHistoryViewModel == null) {
+                FeaturePlaceholderScreen(
+                    title = "提醒记录",
+                    message = "提醒记录组件尚未初始化。",
+                    icon = Icons.AutoMirrored.Rounded.Article,
+                    onBack = { navController.popBackStack() },
+                )
+            } else {
+                FamilyReminderHistoryRoute(
+                    elderId = onboardingState.familyElderId,
+                    onBack = { navController.popBackStack() },
+                    viewModel = familyReminderHistoryViewModel,
+                )
+            }
         }
         composable(AppDestination.FamilyModelConfiguration.route) {
             if (modelConfigurationViewModel == null) {
@@ -447,7 +505,7 @@ fun SilverAgeApp(
                 modifier = Modifier.align(Alignment.TopCenter),
             )
         }
-        if (BuildConfig.DEBUG) {
+        if (BuildConfig.GUI_DEBUG_ENABLED) {
             GuiDebugPanelHost(
                 modifier = Modifier.align(Alignment.BottomEnd),
             )

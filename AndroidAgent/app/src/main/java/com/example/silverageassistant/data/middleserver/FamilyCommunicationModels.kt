@@ -47,10 +47,43 @@ data class PendingCommandsResult(
     val hasMore: Boolean,
 )
 
+data class FamilyReminderHistoryItem(
+    val commandId: String,
+    val title: String,
+    val content: String,
+    val scheduledAt: String,
+    val timezone: String,
+    val createdAt: String,
+    val deliveryStatus: String,
+    val completionStatus: String,
+    val storedAt: String?,
+    val completedAt: String?,
+)
+
+data class FamilyReminderHistoryResult(
+    val reminders: List<FamilyReminderHistoryItem>,
+    val nextCursor: String?,
+)
+
 interface FamilyCommunicationRepository {
     suspend fun sendNotification(request: FamilyNotificationRequest): FamilyCommandResult
 
     suspend fun createReminder(request: FamilyReminderRequest): FamilyCommandResult
+
+    suspend fun getReminderHistory(
+        elderId: String,
+        limit: Int = 100,
+        cursor: String? = null,
+    ): FamilyReminderHistoryResult
+
+    /** Hides one reminder from this family account without deleting the elder's reminder. */
+    suspend fun archiveReminder(
+        elderId: String,
+        commandId: String,
+        clientRequestId: String,
+    ) {
+        throw UnsupportedOperationException("Reminder archive is not available")
+    }
 }
 
 interface ElderCommandRepository {
@@ -61,6 +94,12 @@ interface ElderCommandRepository {
         clientRequestId: String,
         storedAt: String,
     )
+
+    suspend fun reportReminderCompleted(
+        commandId: String,
+        clientRequestId: String,
+        completedAt: String,
+    ) = Unit
 }
 
 data class FamilyContactProfile(

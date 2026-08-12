@@ -17,6 +17,8 @@ import com.example.silverageassistant.domain.agent.AgentLongTermMemory
 import com.example.silverageassistant.domain.agent.MemoryFamilyContact
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -202,10 +204,71 @@ class OnboardingViewModelTest {
     }
 
     @Test
-    fun invalidDeviceCredential_keepsElderHomeAndShowsRebindState() {
+    fun invalidDeviceCredential_resetsToRoleSelectionAndClearsLocalSession() = runBlocking {
         val credentials = InMemoryMiddleServerCredentialStore(
             deviceCredential = "invalid-device-credential",
         )
+        val appSessionStore = InMemoryAppSessionStore(
+            PersistedAppSession(
+                defaultRole = AppRole.ELDER,
+                elderOnboardingCompleted = true,
+                lastKnownElderBound = true,
+            ),
+        )
+        val viewModel = OnboardingViewModel(
+            middleServerRepository = FakeSessionRepository(
+                elderRestore = SessionRestoreResult(SessionRestoreStatus.INVALID),
+            ),
+            appSessionStore = appSessionStore,
+            credentialStore = credentials,
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        assertEquals(StartupDestination.RoleSelection, viewModel.uiState.value.startupDestination)
+        assertEquals(SessionConnectionStatus.Invalid, viewModel.uiState.value.sessionConnectionStatus)
+        assertFalse(viewModel.uiState.value.hasDeviceCredential)
+        assertEquals(null, credentials.deviceCredential)
+        assertEquals(PersistedAppSession(), appSessionStore.session.first())
+    }
+
+    @Test
+    fun revokedFamilyBinding_resetsRoleButKeepsReusableFamilySession() = runBlocking {
+        val credentials = InMemoryMiddleServerCredentialStore(
+            familySession = familySession(),
+        )
+        val appSessionStore = InMemoryAppSessionStore(
+            PersistedAppSession(
+                defaultRole = AppRole.FAMILY,
+                familyOnboardingCompleted = true,
+                lastKnownFamilyBound = true,
+                familyElderId = "elder-1",
+            ),
+        )
+        val viewModel = OnboardingViewModel(
+            middleServerRepository = FakeSessionRepository(
+                familyRestore = SessionRestoreResult(
+                    SessionRestoreStatus.INVALID,
+                    RestoredBinding("王阿姨", "小林", "CHILD", elderId = "elder-1"),
+                ),
+            ),
+            appSessionStore = appSessionStore,
+            credentialStore = credentials,
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        assertEquals(StartupDestination.RoleSelection, viewModel.uiState.value.startupDestination)
+        assertEquals(SessionConnectionStatus.Invalid, viewModel.uiState.value.sessionConnectionStatus)
+        assertTrue(viewModel.uiState.value.hasFamilySession)
+        assertEquals(familySession(), credentials.familySession)
+        val saved = appSessionStore.session.first()
+        assertEquals(null, saved.defaultRole)
+        assertFalse(saved.familyOnboardingCompleted)
+        assertFalse(saved.lastKnownFamilyBound)
+        assertEquals("elder-1", saved.familyElderId)
+    }
+
+    @Test
+    fun selectingRoleAfterInvalidation_leavesRoleSelectionState() {
         val viewModel = OnboardingViewModel(
             middleServerRepository = FakeSessionRepository(
                 elderRestore = SessionRestoreResult(SessionRestoreStatus.INVALID),
@@ -217,13 +280,145 @@ class OnboardingViewModelTest {
                     lastKnownElderBound = true,
                 ),
             ),
-            credentialStore = credentials,
+            credentialStore = InMemoryMiddleServerCredentialStore(
+                deviceCredential = "invalid-device-credential",
+            ),
             externalScope = CoroutineScope(Dispatchers.Unconfined),
         )
+        assertEquals(StartupDestination.RoleSelection, viewModel.uiState.value.startupDestination)
 
-        assertEquals(StartupDestination.ElderHome, viewModel.uiState.value.startupDestination)
-        assertEquals(SessionConnectionStatus.Invalid, viewModel.uiState.value.sessionConnectionStatus)
-        assertFalse(viewModel.uiState.value.hasDeviceCredential)
+        val destination = viewModel.selectRole(AppRole.ELDER)
+
+        assertEquals(StartupDestination.ElderSetup, destination)
+        assertEquals(StartupDestination.ElderSetup, viewModel.uiState.value.startupDestination)
+        assertEquals(SessionConnectionStatus.Unknown, viewModel.uiState.value.sessionConnectionStatus)
+    }
+
+    @Test
+    fun familyRebindAfterRevocation_reusesSessionAndElderProfile() {
+        val repository = FakeSessionRepository(
+            familyRestore = SessionRestoreResult(
+                SessionRestoreStatus.INVALID,
+                RestoredBinding("王阿姨", "小林", "CHILD", elderId = "elder-1"),
+            ),
+            regeneratedCode = FamilyOnboardingResult(
+                bindingCode = "223344",
+                bindingCodeExpiresAt = "2026-08-12T13:00:00Z",
+                familyMobileMasked = "138****8000",
+                elderId = "elder-1",
+            ),
+        )
+        val viewModel = OnboardingViewModel(
+            middleServerRepository = repository,
+            appSessionStore = InMemoryAppSessionStore(
+                PersistedAppSession(
+                    defaultRole = AppRole.FAMILY,
+                    familyOnboardingCompleted = true,
+                    lastKnownFamilyBound = true,
+                    familyElderId = "elder-1",
+                ),
+            ),
+            credentialStore = InMemoryMiddleServerCredentialStore(
+                familySession = familySession(),
+            ),
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+        )
+        viewModel.selectRole(AppRole.FAMILY)
+        viewModel.updateFamilyName("小林")
+        viewModel.updateMobileNumber(validTestMobile())
+        viewModel.updateElderDisplayName("王阿姨")
+        viewModel.updateFamilyElderMobileNumber(validTestMobile(lastDigit = '1'))
+        viewModel.updateRelationship(FamilyRelationship.Child)
+
+        assertTrue(viewModel.submitFamilySetup())
+        assertEquals(0, repository.registrationCalls)
+        assertEquals(1, repository.regenerationCalls)
+        assertEquals("223344", viewModel.uiState.value.familyBindingCode)
+        assertEquals(StartupDestination.FamilyHome, viewModel.uiState.value.startupDestination)
+    }
+
+    @Test
+    fun firstFamilyBinding_canBeVerifiedWithoutRestartingApp() {
+        val repository = object : OnboardingMiddleServerRepository {
+            override suspend fun registerFamilyAndCreateBindingCode(
+                request: FamilyOnboardingRequest,
+            ) = FamilyOnboardingResult(
+                bindingCode = "334455",
+                bindingCodeExpiresAt = "2026-08-12T13:00:00Z",
+                familyMobileMasked = "138****8000",
+                elderId = "elder-1",
+            )
+
+            override suspend fun bindElderDevice(
+                request: ElderBindingRequest,
+            ): ElderBindingResult = error("Not used")
+
+            override suspend fun restoreFamilySession() = SessionRestoreResult(
+                SessionRestoreStatus.ACTIVE,
+                RestoredBinding("王阿姨", "小林", "CHILD", elderId = "elder-1"),
+            )
+        }
+        val viewModel = OnboardingViewModel(
+            middleServerRepository = repository,
+            appSessionStore = InMemoryAppSessionStore(),
+            credentialStore = InMemoryMiddleServerCredentialStore(),
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+        )
+        viewModel.selectRole(AppRole.FAMILY)
+        viewModel.updateFamilyName("小林")
+        viewModel.updateMobileNumber(validTestMobile())
+        viewModel.updateElderDisplayName("王阿姨")
+        viewModel.updateFamilyElderMobileNumber(validTestMobile(lastDigit = '1'))
+        viewModel.updateRelationship(FamilyRelationship.Child)
+        assertTrue(viewModel.submitFamilySetup())
+        assertEquals(BindingPreparationStatus.CodeGenerated, viewModel.uiState.value.familyBindingStatus)
+
+        var verified = false
+        viewModel.refreshCurrentSession { verified = it }
+
+        assertTrue(verified)
+        assertEquals(BindingPreparationStatus.Bound, viewModel.uiState.value.familyBindingStatus)
+        assertEquals(StartupDestination.FamilyHome, viewModel.uiState.value.startupDestination)
+    }
+
+    @Test
+    fun foregroundRefresh_detectsBindingInvalidationAfterSuccessfulRestore() {
+        var restoreResult = SessionRestoreResult(
+            SessionRestoreStatus.ACTIVE,
+            RestoredBinding("王阿姨", "小林", "CHILD", elderId = "elder-1"),
+        )
+        val repository = object : OnboardingMiddleServerRepository {
+            override suspend fun registerFamilyAndCreateBindingCode(
+                request: FamilyOnboardingRequest,
+            ): FamilyOnboardingResult = error("Not used")
+
+            override suspend fun bindElderDevice(
+                request: ElderBindingRequest,
+            ): ElderBindingResult = error("Not used")
+
+            override suspend fun restoreFamilySession(): SessionRestoreResult = restoreResult
+        }
+        val viewModel = OnboardingViewModel(
+            middleServerRepository = repository,
+            appSessionStore = InMemoryAppSessionStore(
+                PersistedAppSession(
+                    defaultRole = AppRole.FAMILY,
+                    familyOnboardingCompleted = true,
+                    lastKnownFamilyBound = true,
+                ),
+            ),
+            credentialStore = InMemoryMiddleServerCredentialStore(
+                familySession = familySession(),
+            ),
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+        )
+        assertEquals(StartupDestination.FamilyHome, viewModel.uiState.value.startupDestination)
+
+        restoreResult = SessionRestoreResult(SessionRestoreStatus.INVALID)
+        viewModel.refreshCurrentSession()
+
+        assertEquals(StartupDestination.RoleSelection, viewModel.uiState.value.startupDestination)
+        assertTrue(viewModel.uiState.value.hasFamilySession)
     }
 
     @Test

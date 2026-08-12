@@ -86,9 +86,9 @@ Provider 使用 OpenAI 兼容的 `POST /v1/chat/completions` 与 SSE 流式响�
 - Android 同时过滤 `reasoning_content` 和流式 `<think>...</think>`，不得把内部思考展示给老人；
 - `top_k` 作为 llama.cpp 扩展字段发送；标准云端方言不发送非标准字段。
 
-Provider 只负责协议、鉴权、流式解析和错误分类，不执行工具。`AgentChatCoordinator` 聚合分片工具参数、按注册表校验工具并执行，再把 assistant tool call 和 tool result 追加到下一轮模型请求。当前内置的低风险测试工具是 `get_current_time`，返回老人设备当前日期、时间、星期和时区。
+Provider 只负责协议、鉴权、流式解析和错误分类，不执行工具。`AgentChatCoordinator` 聚合分片工具参数、按注册表校验工具并执行，再把 assistant tool call 和 tool result 追加到下一轮模型请求。主聊天当前注册 `get_current_time`、`get_weather`、`list_today_reminders`、`call_family_contact`、`gui_agent`，并在中台 Reporter 可用时注册 `report_family_situation`；各 Tool 的风险策略、确定性路由和边界见 [`agent-tools-and-capabilities.md`](agent-tools-and-capabilities.md)。
 
-低风险工具同时包含 `get_weather`。模型提出天气查询后，工具从共享天气 Repository 取得当前位置的当前天气、今天和未来三天；缓存期内返回缓存，不重复访问 Open-Meteo。工具不会把经纬度加入模型上下文。天气服务失败、定位未授权或定位不可用时返回结构化错误，由模型用简短中文说明下一步。
+`get_weather` 从共享天气 Repository 取得当前位置的当前天气、今天和未来三天；缓存期内返回缓存，不重复访问 Open-Meteo。工具不会把经纬度加入模型上下文。天气服务失败、定位未授权或定位不可用时返回结构化错误，由模型用简短中文说明下一步。
 
 页面状态为 `Idle / Connecting / Thinking / UsingTool / Responding`。用户可以取消生成并保留已收到的部分内容；网络失败可原请求重试，空回复和截断流会显示可理解错误。首版聊天历史只保存在当前进程内，不写入日志、Room 或中台。
 
@@ -146,6 +146,7 @@ TTS 音色、输出格式、采样率、音量、语速、音调和语言。ASR/
 Provider，但每个 Agent 必须使用独立 Coordinator、上下文、记忆实例和用量归属：
 
 - 主聊天 Agent 使用 `feature=conversation`；
+- 主聊天上下文压缩请求使用 `feature=conversation_context_compression`，与普通聊天推理分开记账；
 - GUI Agent 使用 `feature=gui_agent`；
 - GUI Tool 调用产生的模型轮次不得累计到主聊天上下文或记忆；
 - ASR/TTS Provider 本身不读取 Agent 记忆。调用时可以携带
@@ -154,6 +155,10 @@ Provider，但每个 Agent 必须使用独立 Coordinator、上下文、记忆�
 - 当前只允许 `get_current_time` 同时出现在两个 Agent 的 Tool 能力视图。Tool 实例通过
   共享目录复用，但两个 Agent 使用独立 Registry；天气、联系人、提醒和其他 Tool 暂不
   扩展到 GUI Agent。
+
+状态监控 Agent 不使用 Tool Calling。视觉模型只输出严格的状态 JSON，图像获取、六小时
+状态保存、连续异常阈值、家属事件、证据上传和短信均由端侧确定性编排器调用，不能由模型
+自行选择。
 
 GUI Agent 当前通过 `OpenAiGuiVisionPlanner` 直接使用同一份 OpenAI 兼容连接配置和本地
 加密 API Key，并复用该配置的连接与读取超时（当前默认 10 秒连接、120 秒读取），不得退回
@@ -164,7 +169,7 @@ resize 截图、当前无障碍节点、最近 8 个短期步骤摘要和 GUI Re
 对常见二元数组格式做有界兼容，截断或不完整 JSON 不执行。模型返回的 MLLM usage 以
 `feature=gui_agent` 单独写入 Room。
 
-“和我说话”顶部显示上下文圆形进度，分子使用最近一轮请求的输入 Token，分母使用家属模型配置下发的 `context_window_tokens`。字段范围为 1024—2000000，不能小于最大生成 Token；旧配置缺少该字段时兼容使用 `ModelUsagePolicy.DEFAULT_CONTEXT_WINDOW_TOKENS`（32768）。该值是应用侧上下文管理上限，不等同于厂商模型宣称的最大窗口；后续上下文压缩必须复用同一配置。
+“和我说话”顶部显示上下文圆形进度，分子来自主 Agent `AgentContextManager` 当前实际组装上下文的 Token 占用：请求发送前使用本地估算，Provider 返回 `prompt_tokens` 后校准，轮次提交或后台压缩完成后重新计算；分母使用家属模型配置下发的 `context_window_tokens`。字段范围为 1024—2000000，不能小于最大生成 Token；旧配置缺少该字段时兼容使用 `ModelUsagePolicy.DEFAULT_CONTEXT_WINDOW_TOKENS`（32768）。该值是应用侧上下文管理上限，不等同于厂商模型宣称的最大窗口。
 
 Room 保存 MLLM 输入/输出 Token，以及 ASR/TTS 实际调用次数。语音 MVP 不保存音频时长、
 TTS 字符数或聊天/通知/新闻来源明细；既有协议要求的扩展字段固定为 0。WorkManager 每小时

@@ -2,6 +2,7 @@ package com.example.silverageassistant.service
 
 import com.example.silverageassistant.domain.gui.GuiTargetAppLauncher
 import com.example.silverageassistant.domain.gui.GuiTaskController
+import com.example.silverageassistant.domain.voice.VoiceInteractionCoordinator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -9,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 data class GuiTaskRuntimeRegistration(
     val controller: GuiTaskController,
     val targetAppLauncher: GuiTargetAppLauncher,
+    val voiceCoordinator: VoiceInteractionCoordinator,
 )
 
 /**
@@ -25,10 +27,12 @@ object GuiTaskRuntimeBridge {
     fun bind(
         controller: GuiTaskController,
         targetAppLauncher: GuiTargetAppLauncher,
+        voiceCoordinator: VoiceInteractionCoordinator,
     ) {
         mutableRegistration.value = GuiTaskRuntimeRegistration(
             controller = controller,
             targetAppLauncher = targetAppLauncher,
+            voiceCoordinator = voiceCoordinator,
         )
     }
 

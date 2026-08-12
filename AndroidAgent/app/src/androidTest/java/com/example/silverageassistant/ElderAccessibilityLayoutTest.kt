@@ -27,7 +27,7 @@ class ElderAccessibilityLayoutTest {
         elderNameInput.performTextInput("王阿姨")
         composeRule.onNodeWithText("保存并进入老人模式").performClick()
 
-        composeRule.onNodeWithContentDescription("和我说话，问问题、聊聊天").assertIsDisplayed()
-        composeRule.onNodeWithText("紧急求助").fetchSemanticsNode()
+        composeRule.onNodeWithContentDescription("和我说话").assertIsDisplayed()
+        composeRule.onNodeWithText("新闻播报").fetchSemanticsNode()
     }
 }

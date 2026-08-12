@@ -13,7 +13,7 @@ class GuiAgentSystemPromptProviderTest {
         assertTrue(prompt.contains("gui_agent"))
         assertTrue(prompt.contains("打开"))
         assertTrue(prompt.contains("美团"))
-        assertTrue(prompt.contains("STARTED 只表示任务已创建"))
+        assertTrue(prompt.contains("STARTED 只表示后台任务刚创建"))
     }
 
     @Test

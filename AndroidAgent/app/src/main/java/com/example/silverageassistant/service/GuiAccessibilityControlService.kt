@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.util.DisplayMetrics
 import android.view.Surface
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -37,6 +38,7 @@ import com.example.silverageassistant.domain.gui.GuiPauseReason
 import com.example.silverageassistant.domain.gui.GuiRunPhase
 import com.example.silverageassistant.domain.gui.GuiScrollDirection
 import com.example.silverageassistant.domain.gui.GuiTaskSnapshot
+import com.example.silverageassistant.domain.voice.VoiceListeningState
 import com.example.silverageassistant.domain.gui.vision.AffineTransform2D
 import com.example.silverageassistant.domain.gui.vision.GuiNodeSnapshot
 import com.example.silverageassistant.domain.gui.vision.GuiScreenObservation
@@ -88,12 +90,16 @@ class GuiAccessibilityControlService : AccessibilityService(), GuiDeviceControll
     private var agentTouchSuppressionUntilEpochMillis = 0L
     private var observedTodoId: String? = null
     private var hasSeenTargetWindow = false
+    private var voicePressActive = false
+    private var voiceStartJob: Job? = null
+    private var voiceCompletionJob: Job? = null
+    private var voicePhaseBeforeRecording: GuiRunPhase? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         GuiAccessibilityRuntimeBridge.bind(this)
-        if (BuildConfig.DEBUG) {
+        if (BuildConfig.GUI_DEBUG_ENABLED) {
             serviceScope.launch {
                 GuiDebugTrace.events.collect { events ->
                     debugSummaryView?.text = events.lastOrNull().debugSummaryText()
@@ -114,7 +120,12 @@ class GuiAccessibilityControlService : AccessibilityService(), GuiDeviceControll
                             ) { task, session ->
                                 task to session
                             }
-                            .collect { (task, session) ->
+                            .combine(registration.voiceCoordinator.enabled) {
+                                    taskAndSession, voiceEnabled ->
+                                val (task, session) = taskAndSession
+                                Triple(task, session, voiceEnabled)
+                            }
+                            .collect { (task, session, voiceEnabled) ->
                                 renderedTask = task
                                 if (
                                     task == null ||
@@ -124,7 +135,7 @@ class GuiAccessibilityControlService : AccessibilityService(), GuiDeviceControll
                                 ) {
                                     removeOverlay()
                                 } else {
-                                    showOrUpdateOverlay(task)
+                                    showOrUpdateOverlay(task, voiceEnabled)
                                 }
                             }
                     }
@@ -259,15 +270,24 @@ class GuiAccessibilityControlService : AccessibilityService(), GuiDeviceControll
         }
     }
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() {
+        stopVoiceForActiveGuiTask()
+    }
 
     override fun onDestroy() {
+        stopVoiceForActiveGuiTask()
         GuiAccessibilityRuntimeBridge.unbind(this)
         targetLeftPauseJob?.cancel()
         invalidateFrame()
         removeOverlay()
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    private fun stopVoiceForActiveGuiTask() {
+        val registration = GuiTaskRuntimeBridge.registration.value ?: return
+        val task = registration.controller.activeTask.value ?: return
+        if (!task.phase.isTerminal()) registration.voiceCoordinator.stopAll()
     }
 
     override suspend fun observe(
@@ -1198,7 +1218,10 @@ class GuiAccessibilityControlService : AccessibilityService(), GuiDeviceControll
     private fun String.sanitizeNodeText(): String =
         replace(Regex("\\s+"), " ").trim().take(MAX_NODE_TEXT_LENGTH)
 
-    private fun showOrUpdateOverlay(task: GuiTaskSnapshot) {
+    private fun showOrUpdateOverlay(
+        task: GuiTaskSnapshot,
+        voiceEnabled: Boolean,
+    ) {
         removeOverlay()
         cancelFallbackArmed = false
         val root = LinearLayout(this).apply {
@@ -1220,7 +1243,7 @@ class GuiAccessibilityControlService : AccessibilityService(), GuiDeviceControll
             setTextColor(0xFF303030.toInt())
             maxLines = 2
         })
-        if (BuildConfig.DEBUG) {
+        if (BuildConfig.GUI_DEBUG_ENABLED) {
             root.addView(TextView(this).apply {
                 text = GuiDebugTrace.events.value.lastOrNull().debugSummaryText()
                     ?: "GUI 调试：等待事件"
@@ -1239,6 +1262,7 @@ class GuiAccessibilityControlService : AccessibilityService(), GuiDeviceControll
             addView(controlButton(primaryLabel(task)) {
                 handlePrimaryAction(task)
             }, weightedButtonParams())
+            addView(createVoiceButton(task, voiceEnabled), voiceButtonParams())
             addView(controlButton("取消") {
                 requestCancelConfirmation()
             }.apply {
@@ -1260,6 +1284,118 @@ class GuiAccessibilityControlService : AccessibilityService(), GuiDeviceControll
         runCatching {
             windowManager.addView(root, parameters)
             overlayView = root
+        }
+    }
+
+    private fun createVoiceButton(
+        task: GuiTaskSnapshot,
+        voiceEnabled: Boolean,
+    ): Button = Button(this).apply {
+        text = if (voiceEnabled) "按住\n说话" else "语音\n已关"
+        textSize = 13f
+        isAllCaps = false
+        isEnabled = voiceEnabled
+        alpha = if (voiceEnabled) 1f else 0.55f
+        contentDescription = if (voiceEnabled) "按住说话" else "全局语音开关已关闭"
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(0xFF6750A4.toInt())
+        }
+        setTextColor(Color.WHITE)
+        setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startGuiVoiceInput(task, this)
+                    true
+                }
+
+                MotionEvent.ACTION_UP -> {
+                    finishGuiVoiceInput(task, this)
+                    performClick()
+                    true
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    finishGuiVoiceInput(task, this)
+                    true
+                }
+
+                else -> true
+            }
+        }
+    }
+
+    private fun startGuiVoiceInput(task: GuiTaskSnapshot, button: Button) {
+        val registration = GuiTaskRuntimeBridge.registration.value ?: return
+        if (!registration.voiceCoordinator.enabled.value || voicePressActive) return
+        voicePressActive = true
+        voicePhaseBeforeRecording = task.phase
+        button.text = "松开\n识别"
+        voiceCompletionJob?.cancel()
+        voiceStartJob = serviceScope.launch {
+            runCatching {
+                registration.controller.beginVoiceInput()
+                registration.voiceCoordinator.startGuiAgentRecording(task.todoId)
+            }.onFailure { error ->
+                voicePressActive = false
+                button.text = "按住\n说话"
+                resumeAfterEmptyVoiceInput(task.phase)
+                Toast.makeText(
+                    this@GuiAccessibilityControlService,
+                    error.message ?: "无法开始语音识别",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
+    private fun finishGuiVoiceInput(task: GuiTaskSnapshot, button: Button) {
+        if (!voicePressActive) return
+        voicePressActive = false
+        button.text = "正在\n识别"
+        val registration = GuiTaskRuntimeBridge.registration.value ?: return
+        val pendingStart = voiceStartJob
+        voiceCompletionJob?.cancel()
+        voiceCompletionJob = serviceScope.launch {
+            pendingStart?.join()
+            if (registration.voiceCoordinator.listeningState.value == VoiceListeningState.IDLE) {
+                button.text = "按住\n说话"
+                resumeAfterEmptyVoiceInput(voicePhaseBeforeRecording ?: task.phase)
+                voicePhaseBeforeRecording = null
+                return@launch
+            }
+            runCatching { registration.voiceCoordinator.stopGuiAgentRecording() }
+                .onSuccess { result ->
+                    val transcript = result.transcript.trim()
+                    if (transcript.isBlank()) {
+                        resumeAfterEmptyVoiceInput(voicePhaseBeforeRecording ?: task.phase)
+                        Toast.makeText(
+                            this@GuiAccessibilityControlService,
+                            "没有听清，请按住再说一次",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    } else {
+                        registration.controller.submitVoiceInput(transcript)
+                    }
+                }
+                .onFailure { error ->
+                    resumeAfterEmptyVoiceInput(voicePhaseBeforeRecording ?: task.phase)
+                    if (error !is kotlinx.coroutines.CancellationException) {
+                        Toast.makeText(
+                            this@GuiAccessibilityControlService,
+                            error.message ?: "语音识别失败，请再试一次",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+            button.text = "按住\n说话"
+            voicePhaseBeforeRecording = null
+        }
+    }
+
+    private suspend fun resumeAfterEmptyVoiceInput(previousPhase: GuiRunPhase) {
+        if (previousPhase !in USER_GATE_PHASES) {
+            GuiTaskRuntimeBridge.registration.value?.controller?.resume()
         }
     }
 
@@ -1306,7 +1442,7 @@ class GuiAccessibilityControlService : AccessibilityService(), GuiDeviceControll
     }
 
     private fun showDebugTraceDialog() {
-        if (!BuildConfig.DEBUG) return
+        if (!BuildConfig.GUI_DEBUG_ENABLED) return
         val content = TextView(this).apply {
             text = GuiDebugTrace.events.value
                 .joinToString("\n\n") { it.renderForDebug() }
@@ -1359,6 +1495,14 @@ class GuiAccessibilityControlService : AccessibilityService(), GuiDeviceControll
         dp(52),
         1f,
     )
+
+    private fun voiceButtonParams() = LinearLayout.LayoutParams(
+        dp(64),
+        dp(64),
+    ).apply {
+        marginStart = dp(8)
+        marginEnd = dp(8)
+    }
 
     private fun primaryLabel(task: GuiTaskSnapshot): String = when {
         task.phase == GuiRunPhase.WAITING_ELDER_CONFIRMATION -> "确认并继续"

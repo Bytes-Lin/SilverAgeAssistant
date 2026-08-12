@@ -1,7 +1,7 @@
 # 老人端全局语音交互设计
 
-实现状态（2026-08-05）：老人端全局开关与角色隔离、独立语音 Key 加密存储、内存 PCM
-录音、Qwen ASR/TTS WebSocket、AudioFocus、聊天按住说话、完整回复单次播报、家属新通知
+实现状态（2026-08-11）：老人端全局开关与角色隔离、独立语音 Key 加密存储、内存 PCM
+录音、Qwen ASR/TTS WebSocket、AudioFocus、聊天与 GUI 覆盖层按住说话、完整回复单次播报、家属新通知
 Room 去重播报、新闻前五条单次播报和 ASR/TTS 次数记录已接入。首版流式播放仅接受
 `tts_response_format=pcm`。TTS 已通过初步真机测试；ASR 已完成松手竞态、页面/后台资源释放
 和协程取消消息过滤，仍在继续真机验证。系统 TTS 降级、多设备兼容性和 API 29 验收仍待完成。
@@ -13,7 +13,9 @@ ASR/TTS。老人端使用一个全局开关统一控制以下能力：
 
 1. “和我说话”按住说话：录音 → ASR → 文本 → MLLM → 文字显示 → TTS；
 2. 新家属通知成功写入老人端 Room 后播报通知内容；
-3. 新闻页面显示前 15 条榜单，并一次播报前 5 条新闻。
+3. 新闻页面显示前 15 条榜单，并一次播报前 5 条新闻；
+4. GUI Agent 播报单步操作提示，并在商品/订单确认时播报必要详情；覆盖层按住说话的 ASR
+   文本只交给当前 GuiRun。
 
 首版不实现唤醒词、持续监听、后台偷录、通话录音、实时 ASR WebSocket 和逐 Token
 TTS。ASR 首版通过 WebSocket 发送内存中的实时音频帧，不生成完整录音文件；TTS 必须等待
@@ -46,8 +48,8 @@ FastAPI 中台不代理 ASR/TTS，不接触语音 API Key，不保存音频、�
 中台只继续接收老人端按小时聚合的 ASR/TTS 用量，并负责可靠保存家属通知。
 
 现有 `AgentAsrProvider`、`AgentTtsProvider`、`ModelUsageRecorder` 和用量上报契约继续
-复用。GUI Agent 的语音控制不在本次范围，即使底层 Provider 可复用，也不能因本次实现
-自动启用 GUI Agent 语音入口。
+复用。GUI Agent 使用相同 Provider 和全局开关，但使用 `VoiceFeature.GUI_AGENT` 请求上下文，
+不共享聊天记忆或上下文实例。
 
 ## 3. 全局语音开关
 
@@ -65,7 +67,7 @@ FastAPI 中台不代理 ASR/TTS，不接触语音 API Key，不保存音频、�
 有效状态定义为：
 
 ```text
-effective_enabled = current_role == ELDER && stored_enabled
+effective_enabled = stored_enabled && (elder_page_active || gui_task_active)
 ```
 
 Provider 未配置或暂时离线不会偷偷关闭用户偏好，而是分别显示 ASR/TTS 当前不可用。
@@ -165,8 +167,8 @@ data class VoiceRequestContext(
   移出、系统返回、页面进入后台、来电或权限撤销时取消录音并释放缓冲区；
 - WebSocket 尚在建立时收到的 `ACTION_UP` 也必须保留为待执行停止请求，不能因为 Provider
   仍处于 `IDLE/PROCESSING` 而丢弃；录音状态重组不得重建或取消当前按压手势；
-- “按住说话”入口首版只显示在“和我说话”页面。GUI 任务控制条未接入真实 ASR 前不显示
-  麦克风占位按钮；
+- “和我说话”页面和活动 GUI 任务的无障碍覆盖层提供“按住说话”。GUI 按下期间执行许可
+  暂停，松手识别成功后把文本加入当前 GuiRun 的短期历史并恢复；识别文本不持久化；
 - 首版建议最大录音 60 秒、最短有效录音 300 毫秒，达到上限自动停止；
 - 默认录音中间格式为单声道 PCM16/WAV、16 kHz；若厂商要求不同格式，由 Provider
   或编码适配器转换，UI 不感知厂商格式；

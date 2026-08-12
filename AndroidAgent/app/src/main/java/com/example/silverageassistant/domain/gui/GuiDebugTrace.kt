@@ -33,7 +33,7 @@ object GuiDebugTrace {
         message: String,
         details: String? = null,
     ) {
-        if (!BuildConfig.DEBUG) return
+        if (!BuildConfig.GUI_DEBUG_ENABLED) return
         val event = GuiDebugEvent(
             id = sequence.incrementAndGet(),
             timestampEpochMillis = System.currentTimeMillis(),

@@ -22,6 +22,7 @@ import com.example.silverageassistant.domain.gui.GuiTargetLaunchResult
 import com.example.silverageassistant.domain.gui.GuiVisionPlanner
 import com.example.silverageassistant.domain.gui.vision.GuiScreenObservation
 import com.example.silverageassistant.domain.gui.vision.ScreenshotPixelBudget
+import com.example.silverageassistant.domain.voice.VoiceInteractionCoordinator
 import kotlinx.coroutines.delay
 
 /**
@@ -32,6 +33,7 @@ class AccessibilityGuiRunExecutor(
     private val launcher: GuiTargetAppLauncher,
     private val controllerProvider: GuiDeviceControllerProvider,
     private val planner: GuiVisionPlanner,
+    private val voiceCoordinator: VoiceInteractionCoordinator? = null,
     private val pixelBudget: ScreenshotPixelBudget = ScreenshotPixelBudget(
         maxLongEdgePx = 1_280,
         maxPixelCount = 1_200_000,
@@ -191,6 +193,10 @@ class AccessibilityGuiRunExecutor(
                     return GuiRunOutcome.Failed("目标应用没有保持在前台")
 
                 is GuiObserveResult.SensitiveScreen -> {
+                    voiceCoordinator?.speakGuiAgentConfirmation(
+                        request.todoId,
+                        captured.message,
+                    )
                     control.awaitUserGate(
                         GuiRunPhase.WAITING_MANUAL_PAYMENT,
                         captured.message,
@@ -206,6 +212,12 @@ class AccessibilityGuiRunExecutor(
                     if (awaitingPostActionObservation) {
                         awaitingPostActionObservation = false
                         hasVerifiedAfterAction = true
+                    }
+                    control.consumeVoiceInput()?.let { transcript ->
+                        addHistory(
+                            history,
+                            GuiStepRecord("老人语音补充", transcript),
+                        )
                     }
                     control.awaitRunning()
                     val planned = runCatching {
@@ -312,6 +324,10 @@ class AccessibilityGuiRunExecutor(
                                 }
                                 continue
                             }
+                            voiceCoordinator?.speakGuiAgentConfirmation(
+                                request.todoId,
+                                planned.message,
+                            )
                             control.awaitUserGate(
                                 GuiRunPhase.WAITING_ELDER_CONFIRMATION,
                                 planned.message,
@@ -345,6 +361,10 @@ class AccessibilityGuiRunExecutor(
                                 }
                                 continue
                             }
+                            voiceCoordinator?.speakGuiAgentConfirmation(
+                                request.todoId,
+                                planned.message,
+                            )
                             control.awaitUserGate(
                                 GuiRunPhase.WAITING_MANUAL_PAYMENT,
                                 planned.message,
@@ -380,6 +400,10 @@ class AccessibilityGuiRunExecutor(
                         }
 
                         is GuiPlannedAction.Device -> {
+                            voiceCoordinator?.speakGuiAgentStep(
+                                request.todoId,
+                                planned.summary,
+                            )
                             control.awaitRunning()
                             val result = controller.perform(
                                 targetPackage = target.packageName,
@@ -433,7 +457,9 @@ class AccessibilityGuiRunExecutor(
                 }
             }
         }
-        return GuiRunOutcome.Failed("GUI Agent 已达到本次运行的最大操作步数")
+        return GuiRunOutcome.Failed(
+            "GUI Agent 已达到本次运行的 $MAX_REACT_STEPS 个 ReAct 步骤限制",
+        )
     }
 
     private suspend fun awaitTargetObservation(
@@ -517,8 +543,8 @@ class AccessibilityGuiRunExecutor(
     }
 
     private companion object {
-        const val MAX_REACT_STEPS = 20
-        const val MAX_CONSECUTIVE_FAILURES = 3
+        const val MAX_REACT_STEPS = 5
+        const val MAX_CONSECUTIVE_FAILURES = 5
         const val MAX_LOCAL_HISTORY_STEPS = 8
         const val MAX_HISTORY_RESULT_LENGTH = 300
         const val TARGET_FOREGROUND_POLLS = 12
