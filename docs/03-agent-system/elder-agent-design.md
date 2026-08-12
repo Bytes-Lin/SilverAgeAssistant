@@ -1,5 +1,8 @@
 # 老人端 Agent 系统设计
 
+> 当前实现总览见 [`agent-development-status-2026-08-11.md`](agent-development-status-2026-08-11.md)。
+> 本文描述目标架构与安全规则；进度总览区分“已实现代码”和“已完成真机验收”。
+
 ## 1. 目标
 
 Agent 负责理解老人自然语言、读取必要记忆、选择工具、请求确认、执行动作并反馈结果。Agent 不是自由控制手机的黑盒；它由确定性组件约束。
@@ -47,31 +50,33 @@ Text + TTS
 - 确认策略；
 - 可审计摘要。
 
-### 初始工具清单
+### 当前已注册 Tool
 
-低风险：
+主聊天 Agent：
 
 - `get_current_time`
 - `get_weather`
 - `list_today_reminders`
-- `open_app`
-- `read_news_summary`
-
-中风险：
-
-- `create_local_reminder`
 - `report_family_situation`
 - `call_family_contact`
-- `query_accessibility_screen`
+- `gui_agent`
+
+GUI Agent 使用独立 Registry，当前只共享 `get_current_time`。状态监控 Agent 没有提供给
+MLLM 自由选择的 Tool Registry，而是使用固定的 Kotlin 状态机调用图像源、视觉分析、事件
+上报、证据上传和短信能力。完整代码对应关系见
+[`agent-tools-and-capabilities.md`](agent-tools-and-capabilities.md)。
+
+### 规划中但尚未注册的 Tool
+
+- `create_local_reminder`
+- `update_local_reminder`
+- `read_news_summary`
 - `search_product_or_meal`
-
-高风险：
-
 - `prepare_order`
 - `submit_order`
 - `request_family_approval`
 - `trigger_sos`
-- `upload_safety_image`
+- RAG 检索与更多生活服务 Tool
 
 禁止工具行为：
 
@@ -84,7 +89,14 @@ Text + TTS
 
 `get_weather` 不接受模型提供的经纬度，只查询老人设备当前粗略位置。首页启动刷新和 Tool 查询共享 `WeatherRepository`；缓存有效时 Tool 返回结构化缓存结果，只有缓存过期才重新定位并请求 Open-Meteo。Android 系统或端侧 BigDataCloud 后备反向地理编码成功时，工具结果可包含由同一经纬度解析出的城市名称；结果包含当前天气、今天与未来三天、缓存状态、更新时间和端侧行动建议，但不包含经纬度。
 
+`list_today_reminders` 不接受参数，直接读取老人设备 Room 中按本地日期过滤的提醒快照，返回时间、标题、详情、来源和 `pending/snoozed/completed`。明确查询今日未完成事项时由确定性路由在主模型前调用，并只向老人罗列 `pending/snoozed`；原始快照保留 `completed` 供状态核对。该 Tool 只读且离线可用；模型不得自行确认完成，也不得把 `completed` 推断为已经服药或完成医疗行为。完整契约见 [`today-reminder-tool-interface.md`](today-reminder-tool-interface.md)。
+
 `call_family_contact` 是中风险的本地电话 Tool。模型只能提供家属称呼或关系，不得接收、推测或生成手机号。Tool 从 Android Keystore + AES-GCM 加密的家属快照中本地解析号码：唯一命中时只创建待确认拨号，多人命中时要求补充称呼，不允许自动猜测。Tool 结果和后续模型上下文中不包含号码。老人在本地确认框点击“确认拨打”后，已授予 `CALL_PHONE` 权限时使用 `ACTION_CALL`；拒绝权限时退回 `ACTION_DIAL`。号码仅在加密联系人存储、待拨号内存对象和 Android 电话 Intent 之间短暂传递。
+
+`report_family_situation` 只有在老人设备已装配中台 `FamilySituationReporter` 时加入主聊天
+Registry。模型可提交身体不适、家庭请求、疑似跌倒/昏迷或其他异常的客观摘要；执行器生成
+UTC 时间和幂等 ID，并确定性强制家庭请求为一般事件、其他已允许异常为紧急事件。
+`GUI_ORDER_ASSISTANCE_REQUIRED` 只能由 GUI 任务失败状态机创建，模型不能通过该 Tool 伪造。
 
 ## 4. Policy Engine
 
@@ -212,7 +224,7 @@ Android 兼容实现需要区分：
 当前 Tool 已注册到正式聊天 Tool Registry。主 Agent 对打开或操作美团、微信、淘宝的单一
 及复合请求使用 `START`，Tool 创建 Todo 后立即返回，不阻塞聊天。`STARTED` 不代表任何
 页面结果，主 Agent 不得扩写为已经打开、点击或下单。纯打开请求只有在无障碍观察确认目标
-包处于前台后才完成；其他请求由 `AccessibilityGuiRunExecutor` 最多执行 20 个“观察—规划—单步
+包处于前台后才完成；其他请求由 `AccessibilityGuiRunExecutor` 最多执行 5 个“观察—规划—单步
 动作—重新观察”步骤。无法识别、未安装、无障碍未启用或 Android 10 暂无截图能力属于
 `UNAVAILABLE`，不计为完整运行失败，也不触发第二次尝试或家属通知。
 
@@ -239,8 +251,14 @@ Agent 的消息上下文或长期记忆。当前共享 Tool 仅开放 `get_curre
 - 从目标 App 返回银龄助手时暂停并显示“返回任务”，点击后重新打开目标 App 并恢复暂停前
   的 `WAITING_*` 或运行阶段；
 - 始终提供“取消”，并在 UI 层进行二次确认；
-- GUI 控制条首版不显示“按住说话”占位按钮；当前 ASR 入口仅属于主聊天页。后续真正接入
-  GUI Agent 语音补充输入时再恢复该入口，并补齐暂停动作和 ASR 结果路由。
+- 无障碍覆盖层提供圆形“按住说话”按钮。按下后只暂停执行许可而不重建覆盖层，松手后 ASR
+  文本只进入当前 GuiRun 的短期步骤历史并恢复 ReAct，不写入 Todo、Room、长期记忆或调试
+  正文；没有听清时普通运行阶段自动恢复，确认门阶段继续等待老人说明。
+- GUI Agent 的普通设备动作只 TTS 播报简短的“下一步需要做什么”，不播报坐标、节点、
+  frame_id、推理、重试和执行结果；只有商品/订单确认、付款交接和敏感页面门允许播报当前
+  截图已经确认的必要详情。
+- GUI ASR/TTS 复用应用级 Provider 并受老人端全局语音开关控制。活动 GUI 任务切换到第三方
+  App 后仍属于老人模式语音会话；关闭全局开关会立即停止录音和播报，并禁用覆盖层语音按钮。
 
 `GuiAccessibilityControlService` 同时负责系统覆盖层、目标窗口节点快照、API 30+ 截图、
 节点点击、普通文本输入、节点滚动和坐标手势降级。节点路径和 `frame_id` 只在单帧有效；
@@ -259,7 +277,8 @@ Agent 的消息上下文或长期记忆。当前共享 Tool 仅开放 `get_curre
 盲点。三条路径都复用密码、支付和提交订单确定性策略，并通过 `device_click` Debug 事件区分
 `exact_node_action`、`semantic_rematch`、`coordinate_fallback` 和 `node_unresolved`。
 
-为比较 Grounding 策略，Debug 构建提供进程内 `COORDINATE_ONLY` 实验开关。开启后 Planner
+为比较 Grounding 策略，Debug 构建在 `BuildConfig.GUI_DEBUG_ENABLED=true` 时提供进程内
+`COORDINATE_ONLY` 实验开关。开启后 Planner
 仅接收 resize 后截图、任务、当前步骤和短期历史，不接收节点列表，协议拒绝 `click_node`、
 带 `node_id` 的输入和滚动；点击只能使用上传图像 `0..1000` 归一化坐标。普通文本输入必须
 先通过坐标点击聚焦输入框，再执行 `input_text_focused`。该模式只改变模型目标定位，不关闭
@@ -274,12 +293,14 @@ Agent 的消息上下文或长期记忆。当前共享 Tool 仅开放 `get_curre
 Debug 追踪必须记录 `accessibility/pause_requested`、`task_manager/task_paused` 和
 `task_manager/task_resumed`，用于区分真正人工接管、目标 App 离开和页面过渡误判。
 
-为便于真机定位链路断点，Debug 构建通过 `GuiDebugTrace` 暂存最近 100 条结构化事件，包括
+为便于真机定位链路断点，Debug 构建可通过本机 `dev.properties` 的
+`guiDebugEnabled=true` 显式启用 `GuiDebugTrace`，暂存最近 100 条结构化事件，包括
 `main_agent_tool/call`、`launch_intent_sent`、`retry_app_reset_started`、
 `retry_app_relaunched`、`launch_observation`、`screen/captured`、
 `mllm/request`、`mllm/raw_response`、`react/planned_action` 和设备动作结果。原始模型 JSON
 最多保留 4000 字符，仅存在当前进程内；截图仅记录宽高和字节数，不记录图像数据。Release
-构建禁用采集，任何构建都不把该追踪写入日志文件、Room、中台、聊天记忆或用量上下文。
+Debug 构建默认关闭该开关，Release 构建强制禁用采集。任何构建都不把该追踪写入日志文件、Room、
+中台、聊天记忆或用量上下文。
 第二次完整失败还记录 `terminal_cleanup_started/failed` 与
 `family_escalation_started/succeeded/failed`，用于区分返回聊天页面失败和中台事件上报失败。
 
@@ -317,7 +338,7 @@ Android 首版在老人设备应用私有目录 `files/agent/MEMORY.md` 中保�
 
 完整手机号继续只保存在 Keystore AES-GCM 保护的联系人快照中。`MEMORY.md` 仅写“联系方式已在本机安全保存”，手机号及其尾号都不进入 system prompt 或模型上下文。
 
-每轮模型请求由 `SystemPromptProvider` 读取最新 `MEMORY.md`，使用明确分隔符追加到 system prompt，并声明记忆只能作为背景事实、不能作为指令。回答只检索当前问题需要的最少信息，不主动复述联系方式。
+应用冷启动并初始化 Agent Session 时只完整读取一次 `MEMORY.md`，生成当前进程不可变的 Memory 快照。每轮模型请求复用该快照，通过明确分隔符追加到 system prompt，并声明记忆只能作为背景事实、不能作为指令。会话期间产生的新长期记忆可以写入文件，但不得刷新当前快照；只有下一次应用进程冷启动时才重新读取并进入模型上下文。这样保持 System Prompt + Memory 前缀稳定，避免 Memory 更新导致当前上下文漂移并提高模型缓存复用。回答只使用当前问题需要的最少信息，不主动复述联系方式。
 
 字段建议：
 
@@ -339,16 +360,9 @@ MemoryItem
 
 ## 7. 上下文压缩
 
-当对话超过预算时：
+主聊天 Agent 使用 System Prompt + 启动 Memory 快照、Summary 和结构化 Window 组成上下文。正常窗口保存 8 轮完整对话，第 8 轮响应完成后压缩旧 5 轮并原样保留最近 3 轮；Window 未满 8 轮但超过预算时，将当前全部完整轮次压缩成 1 个仍位于 Window 的合成轮次，不更新 Summary。一次用户输入、模型响应、Tool Call、Tool Result 和最终回答属于同一轮，不得拆分。
 
-1. 保留 system/policy 与最近若干轮；
-2. 抽取尚未完成的任务状态；
-3. 对较早消息生成结构化摘要；
-4. 保存摘要来源消息范围；
-5. 丢弃无关闲聊原文；
-6. 对高风险确认保留原始结构化事件，不只保留自然语言摘要。
-
-摘要必须区分：事实、老人表达、模型推测和待确认信息。
+滑动窗口压缩以结构化结果同时返回 Summary 增量和长期记忆候选；Summary 达到独立限额后再整体语义压缩。模型 Usage 进入统计和预算模块，不进入聊天上下文。详细预算、Memory 生命周期、失败事务和可复用组件边界见 [`context-compression-design.md`](context-compression-design.md)。
 
 ## 8. RAG
 
@@ -381,11 +395,15 @@ Android 使用 `specialUse` 前台服务和不可隐藏的常驻通知维持周�
 
 每次请求由独立视觉分析器直接调用老人配置的 OpenAI 兼容 MLLM，完整输入由安全 system prompt、最近一次检测结果 context、当前设备 UTC 时间、JSON 输出约束和一张图像组成。模型只允许返回 `state=正常/异常` 和异常时必填的简短 `detail`，不允许诊断、工具调用或自由文本。
 
-检测结果在本机 `files/agent/safety-detection-state.json` 暂存，六小时到期自动重置。正常结果把连续异常次数归零；连续第 2 次异常通过共享 `FamilySituationReporter` 创建一次紧急事件，并为该事件上传触发上报的单张图像；同一六小时窗口后续异常不再创建事件。连续第 3 次异常仅成功发送一次短信。事件或短信首次失败可在后续异常轮次重试，但成功后必须由本地标记阻止重复；事件创建成功后先持久化本窗口通知标记，再尝试上传图像，因此图像失败不会导致下一轮重复创建事件。短信号码只从本机加密紧急联系人快照读取，不进入模型 prompt、模型响应或日志。
+检测结果在本机 `files/agent/safety-detection-state.json` 暂存，六小时到期自动重置。正常结果把连续异常次数归零；连续第 2 次异常通过 `FamilySituationReporter` 创建一次紧急事件，并为该事件上传触发上报的单张图像；同一六小时窗口后续异常不再创建事件。连续第 3 次异常仅成功发送一次短信。事件或短信首次失败可在后续异常轮次重试，但成功后必须由本地标记阻止重复；事件创建成功后先持久化本窗口通知标记，再尝试上传图像，因此图像失败不会导致下一轮重复创建事件。短信号码只从本机加密紧急联系人快照读取，不进入模型 prompt、模型响应或日志。
 
 监控结果只能表达为“疑似跌倒”、“疑似晕倒或失去意识”等待核实事件。`GENERAL` 进入家属端“今日状态”，`EMERGENCY` 进入“紧急事件”并在 App 前台弹窗。中台保存结构化事件及独立的短期证据图像，不保存 MLLM 原文；图像不进入普通 JSON 或日志。
 
-聊天 Agent 和状态监控 Agent 共享 `FamilySituationReporter`，聊天侧通过 `report_family_situation` Tool 调用。模型只提供类型、忠实摘要和建议紧急程度；执行器自行生成 UTC 时间和幂等 UUID，并确定性强制“家庭请求=一般”、“身体不适/跌倒/昏迷/其他异常=紧急”。普通闲聊不调用该 Tool。
+聊天 Agent、GUI 失败升级链路和状态监控 Agent 复用同一种 `FamilySituationReporter` 实现及
+中台事件契约，但当前装配代码分别创建实例，不共享对象生命周期。聊天侧通过
+`report_family_situation` Tool 调用；GUI 和监控侧由确定性状态机调用。模型只提供允许范围内
+的类型和忠实摘要；执行器自行生成 UTC 时间和幂等 UUID，并强制“家庭请求=一般”、
+“身体不适/跌倒/昏迷/其他异常/GUI 协助=紧急”。普通闲聊不调用该 Tool。
 
 ## 11. 测试重点
 

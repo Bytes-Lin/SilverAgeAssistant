@@ -17,7 +17,7 @@ class GuiAgentToolTest {
 
         assertTrue(result.contains("\"status\":\"STARTED\""))
         assertTrue(result.contains("\"todo_id\":\"todo-1\""))
-        assertTrue(result.contains("主对话可以继续使用"))
+        assertTrue(result.contains("主 Agent 只能简短告知已开始处理"))
     }
 
     @Test

@@ -63,11 +63,13 @@ class ReminderViewModel(
     private val _syncState = MutableStateFlow(ReminderSyncState())
     val syncState: StateFlow<ReminderSyncState> = _syncState.asStateFlow()
     private var syncJob: Job? = null
+    private var syncRequested = false
     private var recoveredVoiceAnnouncements = false
 
     init {
         if (reminderRepository != null) {
             workScope.launch {
+                reminderRepository.rescheduleIncompleteDeadlines()
                 reminderRepository.reminders.collectLatest { stored ->
                     _reminders.value = stored.map { reminder -> reminder.toUi() }.sortedForToday()
                 }
@@ -92,51 +94,56 @@ class ReminderViewModel(
     fun syncRemoteCommands() {
         val localRepository = reminderRepository ?: return
         val remoteRepository = commandRepository ?: return
+        syncRequested = true
         if (syncJob?.isActive == true) return
         syncJob = workScope.launch {
-            _syncState.value = ReminderSyncState(isSyncing = true, message = "正在接收家人消息…")
-            try {
-                retryPendingAcknowledgements(localRepository, remoteRepository)
-                var afterSequence = localRepository.lastServerSequence()
-                var hasMore: Boolean
-                do {
-                    val requestedAfterSequence = afterSequence
-                    val page = remoteRepository.getPendingCommands(afterSequence)
-                    page.commands.forEach { command ->
-                        val saveResult = localRepository.saveRemoteCommandWithResult(
-                            command = command,
-                            voiceAnnouncementEnabled = voiceCoordinator?.enabled?.value == true,
-                        )
-                        if (saveResult.voiceAnnouncementPending) {
-                            announceFamilyNotification(
-                                reminderId = command.commandId,
-                                sourceDisplayName = command.senderDisplayName,
-                                content = command.content,
+            do {
+                syncRequested = false
+                _syncState.value = ReminderSyncState(isSyncing = true, message = "正在接收家人消息…")
+                try {
+                    retryPendingCompletionReports(localRepository, remoteRepository)
+                    retryPendingAcknowledgements(localRepository, remoteRepository)
+                    var afterSequence = localRepository.lastServerSequence()
+                    var hasMore: Boolean
+                    do {
+                        val requestedAfterSequence = afterSequence
+                        val page = remoteRepository.getPendingCommands(afterSequence)
+                        page.commands.forEach { command ->
+                            val saveResult = localRepository.saveRemoteCommandWithResult(
+                                command = command,
+                                voiceAnnouncementEnabled = voiceCoordinator?.enabled?.value == true,
+                            )
+                            if (saveResult.voiceAnnouncementPending) {
+                                announceFamilyNotification(
+                                    reminderId = command.commandId,
+                                    sourceDisplayName = command.senderDisplayName,
+                                    content = command.content,
+                                    localRepository = localRepository,
+                                )
+                            }
+                            acknowledgeStoredCommand(
+                                commandId = command.commandId,
+                                storedAt = Instant.now(),
                                 localRepository = localRepository,
+                                remoteRepository = remoteRepository,
                             )
                         }
-                        acknowledgeStoredCommand(
-                            commandId = command.commandId,
-                            storedAt = Instant.now(),
-                            localRepository = localRepository,
-                            remoteRepository = remoteRepository,
-                        )
-                    }
-                    afterSequence = maxOf(afterSequence, page.nextAfterSequence)
-                    hasMore = page.hasMore
-                    check(!hasMore || afterSequence > requestedAfterSequence) {
-                        "Command pagination did not advance"
-                    }
-                } while (hasMore)
-                _syncState.value = ReminderSyncState(message = "已同步家人发送的通知和提醒。")
-            } catch (error: MiddleServerRequestException) {
-                _syncState.value = ReminderSyncState(message = error.userMessage, isError = true)
-            } catch (_: Exception) {
-                _syncState.value = ReminderSyncState(
-                    message = "暂时无法同步家人消息，已保存的提醒仍可使用。",
-                    isError = true,
-                )
-            }
+                        afterSequence = maxOf(afterSequence, page.nextAfterSequence)
+                        hasMore = page.hasMore
+                        check(!hasMore || afterSequence > requestedAfterSequence) {
+                            "Command pagination did not advance"
+                        }
+                    } while (hasMore)
+                    _syncState.value = ReminderSyncState(message = "已同步家人发送的通知和提醒。")
+                } catch (error: MiddleServerRequestException) {
+                    _syncState.value = ReminderSyncState(message = error.userMessage, isError = true)
+                } catch (_: Exception) {
+                    _syncState.value = ReminderSyncState(
+                        message = "暂时无法同步家人消息，已保存的提醒仍可使用。",
+                        isError = true,
+                    )
+                }
+            } while (syncRequested)
         }
     }
 
@@ -233,6 +240,26 @@ class ReminderViewModel(
         }
         workScope.launch {
             repository.updateStatus(id, status.toStoredStatus())
+            if (status == ReminderStatus.Completed && commandRepository != null) {
+                retryPendingCompletionReports(repository, commandRepository)
+            }
+        }
+    }
+
+    private suspend fun retryPendingCompletionReports(
+        localRepository: ReminderRepository,
+        remoteRepository: ElderCommandRepository,
+    ) {
+        localRepository.pendingCompletionReports().forEach { pending ->
+            runCatching {
+                remoteRepository.reportReminderCompleted(
+                    commandId = pending.commandId,
+                    clientRequestId = pending.clientRequestId,
+                    completedAt = Instant.ofEpochMilli(pending.completedAtEpochMillis).toString(),
+                )
+            }.onSuccess {
+                localRepository.markCompletionReported(pending.commandId)
+            }
         }
     }
 

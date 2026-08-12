@@ -64,7 +64,7 @@
 
 ### 当前跨阶段实现说明
 
-项目没有严格串行等待每个优先级全部结束：目前已完成 P0 的文字 MLLM 子链路、P1 的天气和提醒/长期记忆基础、P2 的主要家庭协同与用量链路、P3 的 Tool registry 基础，以及 P4 的 mock 图像状态监控。ASR/TTS、本地提醒调度、完整记忆治理、Policy Engine、GUI Agent、网购外卖、SOS 和真实摄像头接入仍未完成，详见 [`../08-roadmap/todo.md`](../08-roadmap/todo.md)。
+项目没有严格串行等待每个优先级全部结束。非 Agent 部分已经完成双角色注册绑定与会话恢复、绑定失效回退、天气和新闻、真实家属联系人、通知/一次性提醒、提醒完成回传与家属记录、老人端系统通知、双端 WebSocket 提示后的 REST 自动补拉、截止后每小时本地通知、ASR/TTS Provider、远程非敏感配置以及模型用量统计。家属提醒记录清除的 Android 页面和请求映射已经完成，但中台账号级归档接口仍待交付。老人时区同步、稍后提醒重新调度、本地提醒 CRUD、周期规则、多老人管理、独立 SOS、真实摄像头接入和发布配置仍未完成。本轮不重新评估 Agent、Memory、Policy 或 GUI Agent，详见 [`../06-development/non-agent-progress-2026-08-12.md`](../06-development/non-agent-progress-2026-08-12.md) 和 [`../08-roadmap/todo.md`](../08-roadmap/todo.md)。
 
 ## 3. 质量需求
 

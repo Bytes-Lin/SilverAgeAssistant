@@ -14,6 +14,19 @@ val developmentProperties = Properties().apply {
 fun buildConfigString(value: String): String =
     "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
+fun developmentBooleanProperty(name: String, defaultValue: Boolean): Boolean =
+    developmentProperties.getProperty(name)
+        ?.trim()
+        ?.lowercase()
+        ?.let { value ->
+            when (value) {
+                "true" -> true
+                "false" -> false
+                else -> null
+            }
+        }
+        ?: defaultValue
+
 android {
     namespace = "com.example.silverageassistant"
     compileSdk {
@@ -34,6 +47,11 @@ android {
 
     buildTypes {
         debug {
+            buildConfigField(
+                "boolean",
+                "GUI_DEBUG_ENABLED",
+                developmentBooleanProperty("guiDebugEnabled", false).toString(),
+            )
             buildConfigField(
                 "String",
                 "MIDDLE_SERVER_BASE_URL",
@@ -63,6 +81,7 @@ android {
             )
         }
         release {
+            buildConfigField("boolean", "GUI_DEBUG_ENABLED", "false")
             buildConfigField("String", "MIDDLE_SERVER_BASE_URL", "\"\"")
             buildConfigField("String", "MODEL_BASE_URL", "\"\"")
             buildConfigField("String", "CHAT_MODEL", "\"\"")

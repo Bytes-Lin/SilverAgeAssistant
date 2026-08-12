@@ -22,6 +22,12 @@ data class ReminderEntity(
     @ColumnInfo(name = "stored_at_epoch_millis") val storedAtEpochMillis: Long,
     val status: String,
     val acknowledged: Boolean,
+    @ColumnInfo(name = "completed_at_epoch_millis")
+    val completedAtEpochMillis: Long? = null,
+    @ColumnInfo(name = "completion_sync_state", defaultValue = "'NOT_REQUIRED'")
+    val completionSyncState: String = "NOT_REQUIRED",
+    @ColumnInfo(name = "completion_request_id")
+    val completionRequestId: String? = null,
     @ColumnInfo(name = "voice_announcement_state", defaultValue = "'NONE'")
     val voiceAnnouncementState: String = "NONE",
     @ColumnInfo(name = "voice_announced_at_epoch_millis")

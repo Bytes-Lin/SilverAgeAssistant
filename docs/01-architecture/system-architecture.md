@@ -48,6 +48,8 @@ Data & Platform
 
 ```text
 API routers / WebSocket endpoints
+  ├── /api/v1/* 老人端与家属端业务接口
+  └── /admin 本机管理页面（可选、默认关闭）
   ↓
 Application services
   ↓
@@ -57,6 +59,10 @@ SQLite / in-process connection state
 ```
 
 当前轻量版本使用 SQLite 保存正式业务记录。WebSocket 连接映射和可丢失的短期在线状态保存在 FastAPI 进程内存；绑定码、凭证状态和需要可靠恢复的数据仍写入 SQLite。首版按单进程运行，不引入 Redis。
+
+管理页面不是独立应用。`app.admin_launcher` 创建同一个 FastAPI 实例，在同一进程中同时提供
+业务 REST、WebSocket 和 `/admin`，并共用同一个 SQLAlchemy/SQLite 数据层。管理路由仅在
+开发环境显式启用，且即使业务服务监听 `0.0.0.0`，管理请求也只接受本机回环来源。
 
 ## 4. 通信可靠性
 
@@ -97,6 +103,8 @@ SOS 不依赖该链路：老人手机本地拨号/短信与服务器事件并行
 Android Emulator/Device
 ├── llama-server（开发机）
 └── FastAPI（开发机，单进程）
+      ├── REST / WebSocket 业务接口
+      ├── 可选本机 /admin
       └── SQLite 数据库文件
 ```
 

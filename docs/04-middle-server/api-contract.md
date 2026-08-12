@@ -4,6 +4,11 @@ Base path：`/api/v1`
 
 > 老人安全状态检测配置、异常事件、家属 ACK 与 WebSocket 提示详见 [`safety-monitoring-and-events-requirements.md`](safety-monitoring-and-events-requirements.md)。
 
+`/admin` 是开发期内嵌在同一 FastAPI 应用中的本机 HTML 管理页面，不属于 Android API，
+因此不使用 `/api/v1` 前缀且不进入 OpenAPI。它默认展示有效家属—老人绑定对，只允许修改
+称呼、关系或软撤销绑定；详细认证、隐私、启动和操作语义见
+[`admin-user-management.md`](admin-user-management.md)。
+
 ## 1. 认证与绑定
 
 ```text
@@ -43,7 +48,7 @@ DELETE /bindings/{binding_id}
 
 手机号不存在、手机号与绑定码不匹配、绑定码不存在统一返回 `BINDING_CREDENTIALS_INVALID`。
 
-第 2 节的家属资料快照、第 3.1 节安全监测接口、第 4 节家属通知与提醒接口和第 7 节用量接口已经实现。第 2、3、5、6 节中的其余接口仍为后续 M04/M06 草案，当前不能作为可调用接口。`/api/v1/ws` 已支持老人设备和家属 access token；当前只承载已实现功能的轻量提示，不代表其余通用事件同步已经完成。
+第 2 节的家属资料快照、第 3.1 节安全监测接口、第 4 节家属通知/提醒创建、补拉、`STORED` ACK、提醒完成回传与家属记录查询，以及第 7 节用量接口已经实现。第 2、3、5、6 节中的其余接口仍为后续 M04/M06 草案，当前不能作为可调用接口。`/api/v1/ws` 已支持老人设备和家属 access token；当前只承载已实现功能的轻量提示，不代表其余通用事件同步已经完成。
 
 家属远程模型配置接口已按第 4.1 节契约实现。家属写入和双方读取均校验有效绑定，更新使用 revision 乐观锁和独立幂等记录；所有成功与错误响应均设置 `Cache-Control: no-store`。
 
@@ -134,10 +139,23 @@ POST /elders/{elder_id}/commands/notifications
 POST /elders/{elder_id}/commands/reminders
 GET  /commands/pending?after_sequence={n}&limit={n}
 POST /commands/{command_id}/ack
+POST /commands/{command_id}/completion
+GET  /elders/{elder_id}/reminders?limit={n}&cursor={opaque}
+POST /elders/{elder_id}/reminders/{command_id}/archive
 WS   /ws
 ```
 
 通知和提醒不依赖 WebSocket 作为事实来源。服务器持久化后可发送 `COMMAND_AVAILABLE`，老人端通过 REST 获取详情，以 `command_id` 幂等写入 Room，提交成功后再 ACK。完整字段、权限、幂等、错误码和中台验收标准见 [`family-notification-and-reminder-requirements.md`](family-notification-and-reminder-requirements.md)。
+
+老人明确确认一次性提醒完成后，老人端先更新 Room，再幂等调用 completion 接口；家属提醒记录通过独立 GET 聚合 `PENDING/STORED/COMPLETED`。接口、离线重试和语义边界见 [`reminder-completion-and-history-requirements.md`](reminder-completion-and-history-requirements.md)。
+
+完成记录提交后，中台可向创建提醒的在线家属发送 `REMINDER_STATUS_CHANGED` 最小提示，
+`payload` 仅包含 `elder_id` 和 `command_id`；家属端随后通过提醒记录 GET 接口刷新，提示中不含
+标题或正文，投递失败不回滚完成记录。
+
+家属端清除提醒记录调用 archive 接口。该操作只为当前家属账号归档记录，后续 GET 默认排除；不得删除老人端提醒、命令送达回执或完成记录，也不得影响其他家属账号。请求体与 `Idempotency-Key` 使用同一个 `client_request_id`，详细权限和验收要求见提醒完成与记录需求文档。
+
+实现状态：Android 清除按钮、幂等请求 ID 和 HTTP 映射已经完成；中台路由、归档表/迁移、查询过滤及 OpenAPI 测试尚待实现，因此当前不能把 archive 列为已交付接口。
 
 `WS /ws` 使用老人设备的 `Authorization: Bearer <device_credential>` 或家属的短期 access token 认证。客户端只发送连接保活和可选 `PING`；业务正文不经 WebSocket 发送，消息只提示客户端通过 REST 补拉。
 

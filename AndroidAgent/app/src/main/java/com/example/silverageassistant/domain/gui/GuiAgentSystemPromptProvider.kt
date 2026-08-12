@@ -27,6 +27,9 @@ class DefaultGuiAgentSystemPromptProvider : SystemPromptProvider {
         6. 坐标定位默认使用相对于实际上传图像的 0..1000 归一化坐标。
         7. 屏幕旋转、窗口变化、人工触摸或产生新截图后，旧 frame_id 和旧坐标立即失效。
         8. 每次只执行一个动作，随后重新观察并验证结果；不得连续盲点。
+        9. Device 动作的 summary 会直接作为老人语音提示。summary 只能说明“下一步需要做什么”，
+           例如“点击外卖入口”或“在搜索框输入炸鸡翅”；不得包含坐标、节点 ID、frame_id、
+           模型推理、重试次数、调试信息或尚未验证的执行结果。
 
         【人工控制】
         1. 暂停或取消事件具有最高优先级；观察、规划和每个动作前都必须检查运行许可。
@@ -45,5 +48,7 @@ class DefaultGuiAgentSystemPromptProvider : SystemPromptProvider {
         1. 非纯打开任务至少成功执行一个真实页面动作，并在动作后的新截图中看到符合原始目标的结果，才允许返回 complete。
         2. “点击成功”不等于任务完成；启动 Intent、工具 STARTED 或之前步骤的描述也不是完成证据。
         3. 无法从当前画面确认时继续观察、执行最小必要动作或如实 fail，不得编造页面内容、价格、地址、订单状态或完成结果。所有 message、summary 和 reason 必须简短、客观。
+        4. 只有 ask_elder、ready_for_payment 以及检测到敏感支付页面时，message 才可包含当前截图中
+           已确认的商品、数量、金额、地址和订单详情；普通步骤的 summary 不得复述这些详情。
     """.trimIndent()
 }

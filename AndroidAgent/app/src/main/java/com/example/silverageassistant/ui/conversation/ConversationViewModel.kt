@@ -9,9 +9,7 @@ import com.example.silverageassistant.domain.agent.PendingPhoneCallCoordinator
 import com.example.silverageassistant.domain.agent.PhoneCallLauncher
 import com.example.silverageassistant.domain.gui.GuiTaskChatFeedback
 import com.example.silverageassistant.domain.gui.GuiTaskChatFeedbackSource
-import com.example.silverageassistant.domain.model.ChatMessage
 import com.example.silverageassistant.domain.model.ChatModelException
-import com.example.silverageassistant.domain.model.ChatRole
 import com.example.silverageassistant.domain.voice.VoiceFeature
 import com.example.silverageassistant.domain.voice.VoiceInteractionCoordinator
 import com.example.silverageassistant.domain.voice.VoicePriority
@@ -53,6 +51,18 @@ class ConversationViewModel(
     private val announcedGuiTaskIds = mutableSetOf<String>()
 
     init {
+        coordinator?.let { agentCoordinator ->
+            workScope.launch {
+                agentCoordinator.contextUsage.collect { usage ->
+                    _uiState.update {
+                        it.copy(
+                            contextTokens = usage.usedTokens,
+                            contextWindowTokens = usage.totalTokens,
+                        )
+                    }
+                }
+            }
+        }
         pendingPhoneCallCoordinator?.let { callCoordinator ->
             workScope.launch {
                 callCoordinator.pending.collectLatest { pendingCall ->
@@ -110,7 +120,6 @@ class ConversationViewModel(
         val message = state.draft.trim()
         if (!state.canSendText || message.isEmpty()) return
         val request = PendingRequest(
-            history = state.messages.toModelHistory(),
             userText = message,
             userMessageId = newMessageId("elder"),
         )
@@ -318,7 +327,7 @@ class ConversationViewModel(
 
         responseJob = workScope.launch {
             try {
-                localCoordinator.streamTurn(request.history, request.userText)
+                localCoordinator.streamTurn(request.userText)
                     .collect { event ->
                         when (event) {
                             is AgentChatEvent.Started -> {
@@ -339,11 +348,8 @@ class ConversationViewModel(
                                 appendAssistantText(assistantMessageId, event.text)
                             }
                             is AgentChatEvent.Usage -> {
-                                event.usage.promptTokens?.let { promptTokens ->
-                                    _uiState.update {
-                                        it.copy(contextTokens = promptTokens.coerceAtLeast(0))
-                                    }
-                                }
+                                // Usage 进入独立统计账本。圆圈订阅 AgentContextManager 的
+                                // 当前上下文状态，避免把单次请求 Usage 当成持久上下文。
                             }
                             AgentChatEvent.Completed -> completeAssistantMessage(assistantMessageId)
                         }
@@ -362,7 +368,6 @@ class ConversationViewModel(
         val state = _uiState.value
         if (state.isProcessing) return
         val request = PendingRequest(
-            history = state.messages.toModelHistory(),
             userText = text,
             userMessageId = newMessageId("elder"),
         )
@@ -450,7 +455,7 @@ class ConversationViewModel(
         responseJob = null
     }
 
-    private fun appendGuiTaskFeedback(feedback: GuiTaskChatFeedback) {
+    private suspend fun appendGuiTaskFeedback(feedback: GuiTaskChatFeedback) {
         if (!announcedGuiTaskIds.add(feedback.todoId)) return
         val text = when (feedback) {
             is GuiTaskChatFeedback.Completed -> "已完成任务。"
@@ -469,21 +474,7 @@ class ConversationViewModel(
                 ),
             )
         }
-    }
-
-    private fun List<ConversationMessage>.toModelHistory(): List<ChatMessage> = mapNotNull {
-        if (!it.includeInModelContext || it.status != ConversationMessageStatus.Complete) {
-            null
-        } else {
-            ChatMessage(
-                role = if (it.speaker == ConversationSpeaker.Elder) {
-                    ChatRole.User
-                } else {
-                    ChatRole.Assistant
-                },
-                content = it.text,
-            )
-        }
+        coordinator?.recordExternalToolOutcome(feedback.todoId, text)
     }
 
     private fun newMessageId(prefix: String): String = "$prefix-${UUID.randomUUID()}"
@@ -509,7 +500,6 @@ class ConversationViewModel(
     }
 
     private data class PendingRequest(
-        val history: List<ChatMessage>,
         val userText: String,
         val userMessageId: String,
     )

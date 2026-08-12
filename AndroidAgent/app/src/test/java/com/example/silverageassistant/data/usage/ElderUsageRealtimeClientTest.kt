@@ -39,4 +39,20 @@ class ElderUsageRealtimeClientTest {
         assertEquals(0, refreshes)
         client.close()
     }
+
+    @Test
+    fun socketConnection_requestsCommandRestReconciliation() {
+        var commandRefreshes = 0
+        val client = ElderUsageRealtimeClient(
+            serverBaseUrl = "http://127.0.0.1:8765/api/v1",
+            credentialStore = InMemoryMiddleServerCredentialStore(),
+            onUsageReportRequested = {},
+        )
+        client.setCommandAvailableListener { commandRefreshes += 1 }
+
+        client.dispatchConnected()
+
+        assertEquals(1, commandRefreshes)
+        client.close()
+    }
 }

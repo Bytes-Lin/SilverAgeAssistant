@@ -32,7 +32,9 @@ import com.example.silverageassistant.data.memory.MarkdownAgentLongTermMemory
 import com.example.silverageassistant.data.contacts.EncryptedFamilyContactStore
 import com.example.silverageassistant.data.onboarding.PreferencesOnboardingProfileStore
 import com.example.silverageassistant.data.reminders.RoomReminderRepository
+import com.example.silverageassistant.data.reminders.RemoteReminderReceivedNotificationPublisher
 import com.example.silverageassistant.data.reminders.SilverAgeDatabase
+import com.example.silverageassistant.data.reminders.WorkManagerReminderDeadlineScheduler
 import com.example.silverageassistant.data.gui.RoomGuiTodoRepository
 import com.example.silverageassistant.data.gui.OpenAiGuiVisionPlanner
 import com.example.silverageassistant.data.session.PreferencesAppSessionStore
@@ -49,6 +51,7 @@ import com.example.silverageassistant.data.usage.RoomModelUsageRecorder
 import com.example.silverageassistant.data.usage.UsageTrackingChatModelProvider
 import com.example.silverageassistant.data.usage.AgentUsageScope
 import com.example.silverageassistant.data.safety.FamilySafetyRealtimeClient
+import com.example.silverageassistant.data.safety.FamilyEmergencyNotificationPublisher
 import com.example.silverageassistant.data.safety.JsonSafetyMonitoringConfigurationStore
 import com.example.silverageassistant.data.voice.DataStoreVoiceInteractionSettingsStore
 import com.example.silverageassistant.data.voice.QwenRealtimeAsrProvider
@@ -58,15 +61,21 @@ import com.example.silverageassistant.service.GuiTaskRuntimeBridge
 import com.example.silverageassistant.service.GuiAccessibilityRuntimeBridge
 import com.example.silverageassistant.ui.SilverAgeApp
 import com.example.silverageassistant.domain.agent.AgentChatCoordinator
+import com.example.silverageassistant.domain.agent.AgentContextManager
 import com.example.silverageassistant.domain.agent.AgentToolCatalog
 import com.example.silverageassistant.domain.agent.AgentToolRegistry
 import com.example.silverageassistant.domain.agent.CurrentTimeTool
 import com.example.silverageassistant.domain.agent.CallFamilyContactTool
+import com.example.silverageassistant.domain.agent.CompositeAgentDeterministicToolRouter
 import com.example.silverageassistant.domain.agent.DefaultSystemPromptProvider
+import com.example.silverageassistant.domain.agent.ModelAgentContextCompressor
+import com.example.silverageassistant.domain.agent.ProcessAgentMemorySnapshotProvider
 import com.example.silverageassistant.domain.agent.PendingPhoneCallCoordinator
 import com.example.silverageassistant.domain.agent.FamilySituationReporter
 import com.example.silverageassistant.domain.agent.ReportFamilySituationTool
 import com.example.silverageassistant.domain.agent.WeatherTool
+import com.example.silverageassistant.domain.agent.TodayRemindersTool
+import com.example.silverageassistant.domain.agent.TodayRemindersMainAgentToolRouter
 import com.example.silverageassistant.domain.agent.SharedAgentToolCapabilities
 import com.example.silverageassistant.domain.gui.GuiAgentTool
 import com.example.silverageassistant.domain.gui.DefaultGuiAgentSystemPromptProvider
@@ -76,6 +85,7 @@ import com.example.silverageassistant.domain.gui.GuiMainAgentToolRouter
 import com.example.silverageassistant.domain.gui.NoOpGuiFailureEscalationSink
 import com.example.silverageassistant.domain.gui.GuiTaskChatFeedbackBus
 import com.example.silverageassistant.domain.gui.GuiTaskManager
+import com.example.silverageassistant.domain.gui.GuiRunPhase
 import com.example.silverageassistant.domain.voice.VoiceInteractionCoordinator
 import com.example.silverageassistant.platform.gui.AccessibilityGuiRunExecutor
 import com.example.silverageassistant.platform.gui.AndroidGuiTerminalTaskSink
@@ -87,6 +97,7 @@ import com.example.silverageassistant.ui.news.NewsViewModel
 import com.example.silverageassistant.ui.onboarding.OnboardingViewModel
 import com.example.silverageassistant.ui.family.FamilyCommunicationViewModel
 import com.example.silverageassistant.ui.family.FamilyContactsViewModel
+import com.example.silverageassistant.ui.family.FamilyReminderHistoryViewModel
 import com.example.silverageassistant.ui.reminders.ReminderViewModel
 import com.example.silverageassistant.ui.modelconfig.ModelConfigurationViewModel
 import com.example.silverageassistant.ui.settings.ModelApiKeyViewModel
@@ -94,6 +105,7 @@ import com.example.silverageassistant.ui.settings.VoiceSettingsViewModel
 import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
 import com.example.silverageassistant.ui.usage.FamilyUsageViewModel
 import com.example.silverageassistant.ui.safety.SafetyMonitoringViewModel
+import kotlinx.coroutines.flow.collect
 
 /**
  * Android 进程的组合根。
@@ -103,6 +115,14 @@ import com.example.silverageassistant.ui.safety.SafetyMonitoringViewModel
  * WebSocket、周期用量上报和状态监控服务也在这里根据已恢复的角色凭证统一启停。
  */
 class MainActivity : ComponentActivity() {
+    private val reminderNotificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        getSharedPreferences(REMINDER_PERMISSION_PREFERENCES, MODE_PRIVATE)
+            .edit()
+            .putBoolean(REMINDER_PERMISSION_REQUESTED, true)
+            .apply()
+    }
     private val safetyPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
@@ -147,6 +167,9 @@ class MainActivity : ComponentActivity() {
             val reminderRepository = remember {
                 RoomReminderRepository(
                     database.reminderDao(),
+                    deadlineScheduler = WorkManagerReminderDeadlineScheduler(applicationContext),
+                    receivedNotifier =
+                        RemoteReminderReceivedNotificationPublisher(applicationContext),
                 )
             }
             val guiTodoRepository = remember {
@@ -233,6 +256,7 @@ class MainActivity : ComponentActivity() {
                         launcher = guiTargetAppLauncher,
                         controllerProvider = GuiAccessibilityRuntimeBridge.provider,
                         planner = guiVisionPlanner,
+                        voiceCoordinator = voiceCoordinator,
                     ),
                     sharedTools = AgentToolRegistry(
                         sharedAgentToolCatalog.toolsFor(
@@ -283,42 +307,63 @@ class MainActivity : ComponentActivity() {
                     configurationStore = modelConfigurationStore,
                     credentialStore = modelCredentialStore,
                 )
+                val mainChatProvider = UsageTrackingChatModelProvider(
+                    delegate = configuredProvider,
+                    configurationStore = modelConfigurationStore,
+                    recorder = modelUsageRecorder,
+                    feature = AgentUsageScope.MAIN_CHAT.feature,
+                )
+                val compressionProvider = UsageTrackingChatModelProvider(
+                    delegate = configuredProvider,
+                    configurationStore = modelConfigurationStore,
+                    recorder = modelUsageRecorder,
+                    feature = AgentUsageScope.MAIN_CHAT_CONTEXT_COMPRESSION.feature,
+                )
+                val systemPromptProvider = DefaultSystemPromptProvider(
+                    memorySnapshotProvider = ProcessAgentMemorySnapshotProvider(
+                        owner = AgentUsageScope.MAIN_CHAT.feature,
+                        loader = agentLongTermMemory::markdownForPrompt,
+                    ),
+                )
+                val toolRegistry = AgentToolRegistry(
+                    buildList {
+                        addAll(
+                            sharedAgentToolCatalog.toolsFor(
+                                SharedAgentToolCapabilities.MainChat,
+                            ),
+                        )
+                        add(WeatherTool(weatherRepository))
+                        add(TodayRemindersTool(reminderRepository))
+                        add(GuiAgentTool(guiTaskManager))
+                        add(
+                            CallFamilyContactTool(
+                                contactStore = familyContactStore,
+                                pendingCallCoordinator = pendingPhoneCallCoordinator,
+                            ),
+                        )
+                        familySituationReporter?.let { reporter ->
+                            add(ReportFamilySituationTool(reporter))
+                        }
+                    },
+                )
                 AgentChatCoordinator(
-                    provider = UsageTrackingChatModelProvider(
-                        delegate = configuredProvider,
-                        configurationStore = modelConfigurationStore,
-                        recorder = modelUsageRecorder,
-                        feature = AgentUsageScope.MAIN_CHAT.feature,
-                    ),
-                    toolRegistry = AgentToolRegistry(
-                        buildList {
-                            addAll(
-                                sharedAgentToolCatalog.toolsFor(
-                                    SharedAgentToolCapabilities.MainChat,
-                                ),
-                            )
-                            add(WeatherTool(weatherRepository))
-                            add(GuiAgentTool(guiTaskManager))
-                            add(
-                                CallFamilyContactTool(
-                                    contactStore = familyContactStore,
-                                    pendingCallCoordinator = pendingPhoneCallCoordinator,
-                                ),
-                            )
-                            familySituationReporter?.let { reporter ->
-                                add(
-                                    ReportFamilySituationTool(
-                                        reporter,
-                                    ),
-                                )
-                            }
-                        },
-                    ),
-                    systemPromptProvider = DefaultSystemPromptProvider(agentLongTermMemory),
+                    provider = mainChatProvider,
+                    toolRegistry = toolRegistry,
+                    systemPromptProvider = systemPromptProvider,
                     optionsProvider = ModelConfigurationAgentOptionsProvider(
                         modelConfigurationStore,
                     ),
-                    deterministicToolRouter = GuiMainAgentToolRouter(),
+                    deterministicToolRouter = CompositeAgentDeterministicToolRouter(
+                        listOf(
+                            GuiMainAgentToolRouter(),
+                            TodayRemindersMainAgentToolRouter(),
+                        ),
+                    ),
+                    contextManager = AgentContextManager(
+                        systemPromptProvider = systemPromptProvider,
+                        compressor = ModelAgentContextCompressor(compressionProvider),
+                        longTermMemory = agentLongTermMemory,
+                    ),
                 )
             }
             val onboardingViewModel: OnboardingViewModel = viewModel(
@@ -332,6 +377,9 @@ class MainActivity : ComponentActivity() {
             )
             val familyCommunicationViewModel: FamilyCommunicationViewModel = viewModel(
                 factory = FamilyCommunicationViewModel.Factory(middleServerRepository),
+            )
+            val familyReminderHistoryViewModel: FamilyReminderHistoryViewModel = viewModel(
+                factory = FamilyReminderHistoryViewModel.Factory(middleServerRepository),
             )
             val reminderViewModel: ReminderViewModel = viewModel(
                 factory = ReminderViewModel.Factory(
@@ -387,6 +435,9 @@ class MainActivity : ComponentActivity() {
                     store = safetyMonitoringConfigurationStore,
                     familyRepository = middleServerRepository,
                     elderRepository = middleServerRepository,
+                    emergencyNotifier = remember {
+                        FamilyEmergencyNotificationPublisher(applicationContext)
+                    },
                 ),
             )
             val familySafetyRealtimeClient = remember {
@@ -395,17 +446,39 @@ class MainActivity : ComponentActivity() {
                         serverBaseUrl = baseUrl,
                         credentialStore = credentialStore,
                         onSafetyEventAvailable = safetyMonitoringViewModel::refreshCurrentEvents,
+                        onReminderStatusAvailable =
+                            familyReminderHistoryViewModel::refreshCurrent,
                     )
                 }
             }
             val onboardingState by onboardingViewModel.uiState.collectAsState()
             val safetyConfiguration by safetyMonitoringConfigurationStore.configuration.collectAsState()
-            DisposableEffect(guiTaskManager, guiTargetAppLauncher) {
-                GuiTaskRuntimeBridge.bind(guiTaskManager, guiTargetAppLauncher)
+            DisposableEffect(guiTaskManager, guiTargetAppLauncher, voiceCoordinator) {
+                GuiTaskRuntimeBridge.bind(
+                    guiTaskManager,
+                    guiTargetAppLauncher,
+                    voiceCoordinator,
+                )
                 onDispose { GuiTaskRuntimeBridge.unbind(guiTaskManager) }
             }
             LaunchedEffect(guiTaskManager) {
                 guiTaskManager.recoverInterruptedTodos()
+            }
+            LaunchedEffect(guiTaskManager, voiceCoordinator) {
+                guiTaskManager.activeTask.collect { task ->
+                    voiceCoordinator.setGuiAgentActive(
+                        task != null && task.phase !in setOf(
+                            GuiRunPhase.COMPLETED,
+                            GuiRunPhase.FAILED,
+                            GuiRunPhase.CANCELLED,
+                            GuiRunPhase.UNAVAILABLE,
+                        ),
+                    )
+                }
+            }
+            LaunchedEffect(chatCoordinator) {
+                // Cold-start warm-up fixes the main Agent's MEMORY.md snapshot for this process.
+                chatCoordinator.initializeContext()
             }
             LaunchedEffect(
                 onboardingState.hasDeviceCredential,
@@ -444,6 +517,7 @@ class MainActivity : ComponentActivity() {
             }
             LaunchedEffect(onboardingState.hasDeviceCredential, elderUsageRealtimeClient) {
                 if (onboardingState.hasDeviceCredential) {
+                    requestReminderNotificationPermissionOnce()
                     elderUsageRealtimeClient?.start()
                 } else {
                     elderUsageRealtimeClient?.stop()
@@ -451,6 +525,7 @@ class MainActivity : ComponentActivity() {
             }
             LaunchedEffect(onboardingState.hasFamilySession, familySafetyRealtimeClient) {
                 if (onboardingState.hasFamilySession) {
+                    requestReminderNotificationPermissionOnce()
                     familySafetyRealtimeClient?.start()
                 } else {
                     familySafetyRealtimeClient?.stop()
@@ -466,6 +541,7 @@ class MainActivity : ComponentActivity() {
                 SilverAgeApp(
                     onboardingViewModel = onboardingViewModel,
                     familyCommunicationViewModel = familyCommunicationViewModel,
+                    familyReminderHistoryViewModel = familyReminderHistoryViewModel,
                     familyContactsViewModel = familyContactsViewModel,
                     reminderViewModel = reminderViewModel,
                     conversationViewModel = conversationViewModel,
@@ -491,10 +567,6 @@ class MainActivity : ComponentActivity() {
             if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.SEND_SMS) !=
                 PackageManager.PERMISSION_GRANTED
             ) add(Manifest.permission.SEND_SMS)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) !=
-                PackageManager.PERMISSION_GRANTED
-            ) add(Manifest.permission.POST_NOTIFICATIONS)
         }
         if (permissions.isEmpty()) {
             preferences.edit().putBoolean(SAFETY_PERMISSION_REQUESTED, true).apply()
@@ -503,8 +575,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestReminderNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) return
+        val preferences = getSharedPreferences(REMINDER_PERMISSION_PREFERENCES, MODE_PRIVATE)
+        if (preferences.getBoolean(REMINDER_PERMISSION_REQUESTED, false)) return
+        reminderNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     private companion object {
         const val SAFETY_PERMISSION_PREFERENCES = "safety_permission_state"
         const val SAFETY_PERMISSION_REQUESTED = "requested_once"
+        const val REMINDER_PERMISSION_PREFERENCES = "reminder_permission_state"
+        const val REMINDER_PERMISSION_REQUESTED = "requested_once"
     }
 }

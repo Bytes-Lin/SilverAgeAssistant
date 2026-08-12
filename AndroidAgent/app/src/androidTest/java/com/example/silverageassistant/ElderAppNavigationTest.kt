@@ -37,8 +37,8 @@ class ElderAppNavigationTest {
         composeRule.onNodeWithText("保存并进入老人模式").performClick()
 
         composeRule.onNodeWithText("今日提醒").assertIsDisplayed()
-        composeRule.onNodeWithText("紧急求助").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("和我说话，问问题、聊聊天").performClick()
+        composeRule.onNodeWithText("新闻播报").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("和我说话").performClick()
 
         composeRule.onNodeWithText("可以开始说话").assertIsDisplayed()
         composeRule.onNodeWithText("开始说话").performClick()

@@ -86,4 +86,18 @@ class MarkdownAgentLongTermMemoryTest {
         assertFalse(markdown.contains("</long_term_memory>"))
         assertTrue(markdown.indexOf("老人喜欢听戏曲") == markdown.lastIndexOf("老人喜欢听戏曲"))
     }
+
+    @Test
+    fun promptRead_returnsCompleteDocumentInsteadOfLegacyEightThousandCharacterSlice() = runBlocking {
+        val file = Files.createTempDirectory("agent-memory").resolve("MEMORY.md").toFile()
+        val memory = MarkdownAgentLongTermMemory(file, clock)
+
+        repeat(90) { index ->
+            memory.appendMemory("fact-$index-${"walking".repeat(25)}")
+        }
+
+        val markdown = memory.markdownForPrompt()
+        assertTrue(markdown.length > 8_000)
+        assertTrue(markdown.contains("fact-89"))
+    }
 }

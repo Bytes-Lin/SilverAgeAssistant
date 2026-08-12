@@ -139,6 +139,9 @@ class HttpOnboardingMiddleServerRepository(
             getBindings(savedSession.accessToken)
         } catch (error: MiddleServerRequestException) {
             if (error.code.isOfflineError()) return SessionRestoreResult(SessionRestoreStatus.OFFLINE)
+            if (error.code == "BINDING_REVOKED") {
+                return SessionRestoreResult(SessionRestoreStatus.INVALID)
+            }
             if (error.code != "AUTHENTICATION_REQUIRED") throw error
             try {
                 val refreshed = post(
@@ -158,6 +161,9 @@ class HttpOnboardingMiddleServerRepository(
                     }
                     refreshError.code == "AUTHENTICATION_REQUIRED" -> {
                         credentialStore.clearFamilySession()
+                        SessionRestoreResult(SessionRestoreStatus.INVALID)
+                    }
+                    refreshError.code == "BINDING_REVOKED" -> {
                         SessionRestoreResult(SessionRestoreStatus.INVALID)
                     }
                     else -> throw refreshError
@@ -185,7 +191,7 @@ class HttpOnboardingMiddleServerRepository(
         } catch (error: MiddleServerRequestException) {
             when {
                 error.code.isOfflineError() -> SessionRestoreResult(SessionRestoreStatus.OFFLINE)
-                error.code == "AUTHENTICATION_REQUIRED" -> {
+                error.code == "AUTHENTICATION_REQUIRED" || error.code == "BINDING_REVOKED" -> {
                     credentialStore.clearDeviceCredential()
                     SessionRestoreResult(SessionRestoreStatus.INVALID)
                 }
@@ -198,19 +204,29 @@ class HttpOnboardingMiddleServerRepository(
         val response = get(path = "/bindings", bearerToken = bearerToken)
         val bindings = response.optJSONArray("bindings")
             ?: throw JSONException("Missing response field")
-        val first = bindings.optJSONObject(0)
+        val first = (0 until bindings.length())
+            .asSequence()
+            .mapNotNull(bindings::optJSONObject)
+            .firstOrNull { it.isNull("revoked_at") }
+        if (first == null && bindings.length() > 0) {
+            val revoked = bindings.optJSONObject(0)
+            return SessionRestoreResult(
+                status = SessionRestoreStatus.INVALID,
+                binding = revoked?.toRestoredBinding(),
+            )
+        }
         return SessionRestoreResult(
             status = SessionRestoreStatus.ACTIVE,
-            binding = first?.let {
-                RestoredBinding(
-                    elderDisplayName = it.requiredString("elder_display_name"),
-                    familyDisplayName = it.requiredString("family_display_name"),
-                    relationship = it.requiredString("relationship"),
-                    elderId = it.requiredString("elder_id"),
-                )
-            },
+            binding = first?.toRestoredBinding(),
         )
     }
+
+    private fun JSONObject.toRestoredBinding() = RestoredBinding(
+        elderDisplayName = requiredString("elder_display_name"),
+        familyDisplayName = requiredString("family_display_name"),
+        relationship = requiredString("relationship"),
+        elderId = requiredString("elder_id"),
+    )
 
     override suspend fun sendNotification(
         request: FamilyNotificationRequest,
@@ -240,6 +256,75 @@ class HttpOnboardingMiddleServerRepository(
             bearerToken = accessToken,
             idempotencyKey = request.clientRequestId,
         ).toFamilyCommandResult()
+    }
+
+    override suspend fun getReminderHistory(
+        elderId: String,
+        limit: Int,
+        cursor: String?,
+    ): FamilyReminderHistoryResult = withFamilyAccessToken { accessToken ->
+        val query = buildString {
+            append("/elders/")
+            append(elderId)
+            append("/reminders?limit=")
+            append(limit.coerceIn(1, 100))
+            cursor?.takeIf(String::isNotBlank)?.let {
+                append("&cursor=")
+                append(URLEncoder.encode(it, Charsets.UTF_8.name()))
+            }
+        }
+        val response = get(path = query, bearerToken = accessToken)
+        val items = response.optJSONArray("reminders")
+            ?: throw JSONException("Missing response field")
+        FamilyReminderHistoryResult(
+            reminders = buildList {
+                for (index in 0 until items.length()) {
+                    val item = items.optJSONObject(index)
+                        ?: throw JSONException("Invalid reminder item")
+                    add(
+                        FamilyReminderHistoryItem(
+                            commandId = item.requiredString("command_id"),
+                            title = item.requiredString("title"),
+                            content = item.requiredString("content"),
+                            scheduledAt = item.requiredString("scheduled_at"),
+                            timezone = item.requiredString("timezone"),
+                            createdAt = item.requiredString("created_at"),
+                            deliveryStatus = item.requiredString("delivery_status"),
+                            completionStatus = item.requiredString("completion_status"),
+                            storedAt = if (item.isNull("stored_at")) {
+                                null
+                            } else {
+                                item.requiredString("stored_at")
+                            },
+                            completedAt = if (item.isNull("completed_at")) {
+                                null
+                            } else {
+                                item.requiredString("completed_at")
+                            },
+                        ),
+                    )
+                }
+            },
+            nextCursor = if (response.isNull("next_cursor")) {
+                null
+            } else {
+                response.requiredString("next_cursor")
+            },
+        )
+    }
+
+    override suspend fun archiveReminder(
+        elderId: String,
+        commandId: String,
+        clientRequestId: String,
+    ) = withFamilyAccessToken { accessToken ->
+        post(
+            path = "/elders/$elderId/reminders/$commandId/archive",
+            body = JSONObject().put("client_request_id", clientRequestId),
+            bearerToken = accessToken,
+            idempotencyKey = clientRequestId,
+        )
+        Unit
     }
 
     override suspend fun getPendingCommands(
@@ -300,6 +385,24 @@ class HttpOnboardingMiddleServerRepository(
                 .put("client_request_id", clientRequestId)
                 .put("ack_type", "STORED")
                 .put("stored_at", storedAt),
+            bearerToken = credential,
+            idempotencyKey = clientRequestId,
+        )
+    }
+
+    override suspend fun reportReminderCompleted(
+        commandId: String,
+        clientRequestId: String,
+        completedAt: String,
+    ) {
+        val credential = credentialStore.loadDeviceCredential()
+            ?: throw authenticationRequired("老人设备尚未绑定家人。")
+        post(
+            path = "/commands/$commandId/completion",
+            body = JSONObject()
+                .put("client_request_id", clientRequestId)
+                .put("status", "COMPLETED")
+                .put("completed_at", completedAt),
             bearerToken = credential,
             idempotencyKey = clientRequestId,
         )

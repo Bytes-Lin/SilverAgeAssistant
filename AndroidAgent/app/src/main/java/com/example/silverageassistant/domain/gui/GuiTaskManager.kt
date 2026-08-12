@@ -35,6 +35,13 @@ interface GuiTaskController {
     suspend fun resume(): GuiTaskControlResult
 
     suspend fun cancel(): GuiTaskControlResult
+
+    /** 暂停执行许可但不重建覆盖层，避免 ACTION_DOWN 后丢失 ACTION_UP。 */
+    suspend fun beginVoiceInput(): GuiTaskControlResult = GuiTaskControlResult.NoActiveTask
+
+    /** 把 ASR 文本交给当前 GuiRun，并恢复执行；文本不会写入持久化 Todo。 */
+    suspend fun submitVoiceInput(transcript: String): GuiTaskControlResult =
+        GuiTaskControlResult.NoActiveTask
 }
 
 /**
@@ -180,6 +187,43 @@ class GuiTaskManager(
         activeJob?.cancel()
         GuiTaskControlResult.Updated(updated)
     }
+
+    override suspend fun beginVoiceInput(): GuiTaskControlResult = stateMutex.withLock {
+        val current = mutableActiveTask.value ?: return GuiTaskControlResult.NoActiveTask
+        if (current.phase.isTerminal()) return GuiTaskControlResult.AlreadyFinished
+        activeControl?.pause()
+        GuiTaskControlResult.Updated(current)
+    }
+
+    override suspend fun submitVoiceInput(transcript: String): GuiTaskControlResult =
+        stateMutex.withLock {
+            val current = mutableActiveTask.value ?: return GuiTaskControlResult.NoActiveTask
+            if (current.phase.isTerminal()) return GuiTaskControlResult.AlreadyFinished
+            val normalized = transcript
+                .replace(Regex("\\s+"), " ")
+                .trim()
+                .take(MAX_VOICE_INPUT_LENGTH)
+            if (normalized.isBlank()) {
+                return GuiTaskControlResult.Updated(current)
+            }
+            activeControl?.submitVoiceInput(normalized)
+            activeControl?.resume()
+            phaseBeforePause = GuiRunPhase.RUNNING
+            val updated = current.copy(
+                phase = GuiRunPhase.RUNNING,
+                pauseReason = null,
+                statusMessage = "已收到语音说明，正在继续",
+            )
+            mutableActiveTask.value = updated
+            updateTodoStatus(current.todoId, GuiTodoStatus.RUNNING)
+            GuiDebugTrace.record(
+                source = "task_manager",
+                stage = "voice_input_received",
+                message = "已收到 GUI 语音补充并恢复任务",
+                details = "todo=${current.todoId}; chars=${normalized.length}",
+            )
+            GuiTaskControlResult.Updated(updated)
+        }
 
     private suspend fun runTodo(
         initialTodo: GuiTodo,
@@ -435,5 +479,6 @@ class GuiTaskManager(
     private companion object {
         const val MAX_COMPLETE_RUN_ATTEMPTS = 2
         const val MAX_TODO_CONTENT_LENGTH = 200
+        const val MAX_VOICE_INPUT_LENGTH = 300
     }
 }

@@ -4,9 +4,12 @@ import com.example.silverageassistant.data.middleserver.FamilyCommandResult
 import com.example.silverageassistant.data.middleserver.FamilyCommunicationRepository
 import com.example.silverageassistant.data.middleserver.FamilyNotificationRequest
 import com.example.silverageassistant.data.middleserver.FamilyReminderRequest
+import com.example.silverageassistant.data.middleserver.FamilyReminderHistoryResult
 import com.example.silverageassistant.data.middleserver.MiddleServerRequestException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -61,6 +64,35 @@ class FamilyCommunicationViewModelTest {
         assertTrue(request.timezone.isNotBlank())
     }
 
+    @Test
+    fun selectingPastTimeToday_isRejectedImmediately() {
+        val fixedNow = ZonedDateTime.of(2026, 8, 11, 10, 30, 0, 0, ZoneId.of("Asia/Shanghai"))
+        val viewModel = FamilyCommunicationViewModel(
+            repository = FakeFamilyCommunicationRepository(),
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+            now = { fixedNow },
+        )
+
+        viewModel.selectReminderDate("2026-08-11")
+        viewModel.selectReminderTime("09:00")
+
+        assertEquals("11:30", viewModel.uiState.value.reminderTime)
+        assertEquals("截止时间必须晚于当前时间", viewModel.uiState.value.reminderDateTimeError)
+    }
+
+    @Test
+    fun defaultReminderTime_crossingMidnight_usesNextDate() {
+        val fixedNow = ZonedDateTime.of(2026, 8, 11, 23, 30, 0, 0, ZoneId.of("Asia/Shanghai"))
+        val viewModel = FamilyCommunicationViewModel(
+            repository = FakeFamilyCommunicationRepository(),
+            externalScope = CoroutineScope(Dispatchers.Unconfined),
+            now = { fixedNow },
+        )
+
+        assertEquals("2026-08-12", viewModel.uiState.value.reminderDate)
+        assertEquals("00:30", viewModel.uiState.value.reminderTime)
+    }
+
     private fun viewModel(repository: FamilyCommunicationRepository) =
         FamilyCommunicationViewModel(
             repository = repository,
@@ -85,6 +117,12 @@ class FamilyCommunicationViewModelTest {
             reminders += request
             return result()
         }
+
+        override suspend fun getReminderHistory(
+            elderId: String,
+            limit: Int,
+            cursor: String?,
+        ) = FamilyReminderHistoryResult(emptyList(), null)
 
         private fun result() = FamilyCommandResult(
             commandId = "command-1",

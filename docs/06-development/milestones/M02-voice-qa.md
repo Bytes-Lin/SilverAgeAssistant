@@ -16,6 +16,7 @@
 - [x] ChatModelProvider + llama-server/OpenAI-compatible SSE 实现；
 - [x] Qwen TTS WebSocket Provider、PCM AudioTrack 播放和取消；
 - [x] 聊天按住说话手势、连接中松手排队、页面/后台取消和 `AudioRecord` 可靠释放；
+- [x] GUI Agent 覆盖层按住说话、单步 TTS 和全局语音开关联动；
 - [x] 新闻前 5 条带本地日期时间的单次 TTS、家属新通知首次入库播报；
 - [x] 主动协程取消静默处理，禁止向老人显示调试异常和网络栈消息；
 - [x] ApiCredentialStore（Keystore AES-GCM + DataStore）；

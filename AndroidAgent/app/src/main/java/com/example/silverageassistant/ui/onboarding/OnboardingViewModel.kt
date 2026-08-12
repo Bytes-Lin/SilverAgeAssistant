@@ -54,6 +54,7 @@ class OnboardingViewModel(
 
     private var elderPersistenceJob: Job? = null
     private var familyPersistenceJob: Job? = null
+    private var sessionRefreshJob: Job? = null
 
     init {
         when {
@@ -63,13 +64,58 @@ class OnboardingViewModel(
     }
 
     fun selectRole(role: AppRole): StartupDestination {
-        workScope.launch {
-            appSessionStore?.update { it.copy(defaultRole = role) }
-        }
-        return if (role == AppRole.ELDER) {
+        val destination = if (role == AppRole.ELDER) {
             StartupDestination.ElderSetup
         } else {
             StartupDestination.FamilySetup
+        }
+        // Navigation observes this state as well as the NavController. Update it synchronously so
+        // the invalid-session redirect cannot mistake a deliberate role selection for stale state.
+        _uiState.update {
+            it.copy(
+                startupDestination = destination,
+                sessionConnectionStatus = SessionConnectionStatus.Unknown,
+                sessionMessage = null,
+                networkMessage = null,
+            )
+        }
+        workScope.launch {
+            appSessionStore?.update { it.copy(defaultRole = role) }
+        }
+        return destination
+    }
+
+    /**
+     * Revalidates the active bound session when the app returns to the foreground.
+     * Offline failures keep the current role usable; only an explicit invalid result resets onboarding.
+     */
+    fun refreshCurrentSession(onCompleted: (Boolean) -> Unit = {}) {
+        if (_uiState.value.isStartupLoading) {
+            onCompleted(false)
+            return
+        }
+        val activeRefresh = sessionRefreshJob
+        if (activeRefresh?.isActive == true) {
+            workScope.launch {
+                activeRefresh.join()
+                onCompleted(
+                    _uiState.value.sessionConnectionStatus == SessionConnectionStatus.Online &&
+                        _uiState.value.familyBindingStatus == BindingPreparationStatus.Bound,
+                )
+            }
+            return
+        }
+        val destination = _uiState.value.startupDestination
+        sessionRefreshJob = workScope.launch {
+            when (destination) {
+                StartupDestination.FamilyHome -> refreshFamilySession()
+                StartupDestination.ElderHome -> refreshElderSession()
+                else -> Unit
+            }
+            onCompleted(
+                _uiState.value.sessionConnectionStatus == SessionConnectionStatus.Online &&
+                    _uiState.value.familyBindingStatus == BindingPreparationStatus.Bound,
+            )
         }
     }
 
@@ -174,6 +220,7 @@ class OnboardingViewModel(
                 }
                 _uiState.update {
                     it.copy(
+                        startupDestination = StartupDestination.ElderHome,
                         isSubmitting = false,
                         elderBindingStatus = BindingPreparationStatus.Bound,
                         familyMobileMasked = result.familyMobileMasked,
@@ -242,16 +289,24 @@ class OnboardingViewModel(
         _uiState.update { it.copy(isSubmitting = true) }
         workScope.launch {
             try {
-                val result = middleServerRepository.registerFamilyAndCreateBindingCode(
-                    FamilyOnboardingRequest(
+                val request = FamilyOnboardingRequest(
                         displayName = draft.displayName.trim(),
                         mobileNumber = draft.mobileNumber,
                         elderDisplayName = draft.elderDisplayName.trim(),
                         elderMobileNumber = draft.elderMobileNumber,
                         relationship = requireNotNull(draft.relationship).name.uppercase(),
                         emergencyContact = draft.emergencyContact,
-                    ),
-                )
+                    )
+                // A revoked binding does not delete the family account or its authenticated
+                // session. Reuse the known elder profile to generate a new code instead of trying
+                // to register the same mobile number again.
+                val reusableElderId = _uiState.value.familyElderId
+                    ?.takeIf { _uiState.value.hasFamilySession && it.isNotBlank() }
+                val result = if (reusableElderId == null) {
+                    middleServerRepository.registerFamilyAndCreateBindingCode(request)
+                } else {
+                    middleServerRepository.regenerateBindingCode(reusableElderId)
+                }
                 val syncedAt = Instant.now().toString()
                 appSessionStore?.update {
                     it.copy(
@@ -267,6 +322,7 @@ class OnboardingViewModel(
                 }
                 _uiState.update {
                     it.copy(
+                        startupDestination = StartupDestination.FamilyHome,
                         isSubmitting = false,
                         familyBindingStatus = BindingPreparationStatus.CodeGenerated,
                         familyBindingCode = result.bindingCode,
@@ -524,6 +580,19 @@ class OnboardingViewModel(
         when (result.status) {
             SessionRestoreStatus.ACTIVE -> {
                 val binding = result.binding
+                if (
+                    binding == null &&
+                    _uiState.value.familyBindingStatus == BindingPreparationStatus.Bound
+                ) {
+                    val canReuseFamilySession = runCatching {
+                        credentialStore?.loadFamilySession() != null
+                    }.getOrDefault(false)
+                    resetAfterBindingInvalidation(
+                        role = AppRole.FAMILY,
+                        preserveFamilySession = canReuseFamilySession,
+                    )
+                    return
+                }
                 appSessionStore?.update {
                     it.copy(
                         lastKnownFamilyBound = binding != null,
@@ -562,13 +631,15 @@ class OnboardingViewModel(
             }
             SessionRestoreStatus.OFFLINE -> showOfflineSession()
             SessionRestoreStatus.INVALID, SessionRestoreStatus.MISSING -> {
-                _uiState.update {
-                    it.copy(
-                        hasFamilySession = false,
-                        sessionConnectionStatus = SessionConnectionStatus.Invalid,
-                        sessionMessage = "家属登录已失效，请在设置中重新登录。",
-                    )
-                }
+                val canReuseFamilySession = runCatching {
+                    credentialStore?.loadFamilySession() != null
+                }.getOrDefault(false)
+                resetAfterBindingInvalidation(
+                    role = AppRole.FAMILY,
+                    preserveFamilySession = canReuseFamilySession,
+                    recoveredFamilyElderId = result.binding?.elderId,
+                    familyBindingWasRevoked = result.binding != null,
+                )
             }
         }
     }
@@ -631,16 +702,81 @@ class OnboardingViewModel(
             }
             SessionRestoreStatus.OFFLINE -> showOfflineSession()
             SessionRestoreStatus.INVALID, SessionRestoreStatus.MISSING -> {
-                runCatching { agentLongTermMemory?.clearFamilyContacts() }
-                _uiState.update {
-                    it.copy(
-                        hasDeviceCredential = false,
-                        elderBindingStatus = BindingPreparationStatus.NotPrepared,
-                        sessionConnectionStatus = SessionConnectionStatus.Invalid,
-                        sessionMessage = "家人绑定已失效，请在设置中重新绑定。",
+                resetAfterBindingInvalidation(role = AppRole.ELDER)
+            }
+        }
+    }
+
+    /**
+     * A revoked binding ends the local role session. Credentials and role-completion flags are removed
+     * together so the next screen and the next cold start both begin at role selection.
+     */
+    private suspend fun resetAfterBindingInvalidation(
+        role: AppRole,
+        preserveFamilySession: Boolean = false,
+        recoveredFamilyElderId: String? = null,
+        familyBindingWasRevoked: Boolean = role == AppRole.FAMILY,
+    ) {
+        if (role == AppRole.ELDER) {
+            runCatching { credentialStore?.clearDeviceCredential() }
+            runCatching { agentLongTermMemory?.clearFamilyContacts() }
+        } else if (!preserveFamilySession) {
+            runCatching { credentialStore?.clearFamilySession() }
+        }
+        runCatching {
+            appSessionStore?.update { session ->
+                when (role) {
+                    AppRole.ELDER -> session.copy(
+                        defaultRole = null,
+                        elderOnboardingCompleted = false,
+                        lastKnownElderBound = false,
+                        lastSyncedAt = null,
+                    )
+                    AppRole.FAMILY -> session.copy(
+                        defaultRole = null,
+                        familyOnboardingCompleted = false,
+                        lastKnownFamilyBound = false,
+                        lastSyncedAt = null,
+                        familyElderId = if (familyBindingWasRevoked) {
+                            recoveredFamilyElderId
+                                ?.takeIf(String::isNotBlank)
+                                ?: session.familyElderId
+                        } else {
+                            null
+                        },
                     )
                 }
             }
+        }
+        _uiState.update {
+            it.copy(
+                startupDestination = StartupDestination.RoleSelection,
+                hasFamilySession = if (role == AppRole.FAMILY) {
+                    preserveFamilySession
+                } else {
+                    it.hasFamilySession
+                },
+                hasDeviceCredential = if (role == AppRole.ELDER) {
+                    false
+                } else {
+                    it.hasDeviceCredential
+                },
+                elderBindingStatus = BindingPreparationStatus.NotPrepared,
+                familyBindingStatus = BindingPreparationStatus.NotPrepared,
+                familyBindingCode = null,
+                familyBindingCodeExpiresAt = null,
+                familyMobileMasked = null,
+                familyElderId = if (role == AppRole.FAMILY && !familyBindingWasRevoked) {
+                    null
+                } else {
+                    recoveredFamilyElderId
+                        ?.takeIf(String::isNotBlank)
+                        ?: it.familyElderId
+                },
+                lastSyncedAt = null,
+                sessionConnectionStatus = SessionConnectionStatus.Invalid,
+                sessionMessage = "绑定已失效，请重新选择使用身份并完成绑定。",
+            )
         }
     }
 

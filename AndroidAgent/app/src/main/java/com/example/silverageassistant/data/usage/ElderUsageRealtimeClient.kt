@@ -105,6 +105,11 @@ class ElderUsageRealtimeClient(
     }
 
     private inner class Listener : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            // A fresh connection may follow an offline period. Reconcile reliable REST data once.
+            dispatchConnected()
+        }
+
         override fun onMessage(webSocket: WebSocket, text: String) {
             dispatchServerMessage(text)
         }
@@ -129,6 +134,10 @@ class ElderUsageRealtimeClient(
             JSONObject(text).optString("message_type")
         }.getOrNull()
         dispatchMessageType(messageType)
+    }
+
+    internal fun dispatchConnected() {
+        onCommandAvailable?.let { listener -> runCatching(listener) }
     }
 
     internal fun dispatchMessageType(messageType: String?) {
