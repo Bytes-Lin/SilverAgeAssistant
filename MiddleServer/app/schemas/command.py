@@ -77,3 +77,58 @@ class CommandAckResponse(StrictSchema):
     command_id: UUID
     status: CommandStatus
     acked_at: datetime
+
+
+class CompletionStatus(StrEnum):
+    COMPLETED = "COMPLETED"
+
+
+class ReminderCompletionState(StrEnum):
+    PENDING = "PENDING"
+    COMPLETED = "COMPLETED"
+
+
+class DeliveryStatus(StrEnum):
+    PENDING = "PENDING"
+    STORED = "STORED"
+
+
+class ReminderCompletionRequest(StrictSchema):
+    client_request_id: UUID
+    status: CompletionStatus
+    completed_at: datetime
+
+
+class ReminderCompletionResponse(StrictSchema):
+    command_id: UUID
+    status: CompletionStatus
+    completed_at: datetime
+    reported_at: datetime
+
+
+class ReminderHistoryItem(StrictSchema):
+    command_id: UUID
+    title: str
+    content: str
+    scheduled_at: datetime
+    timezone: str
+    created_at: datetime
+    delivery_status: DeliveryStatus
+    completion_status: ReminderCompletionState
+    stored_at: datetime | None
+    completed_at: datetime | None
+
+
+class ReminderHistoryResponse(StrictSchema):
+    reminders: list[ReminderHistoryItem]
+    next_cursor: str | None
+
+
+class ReminderArchiveRequest(StrictSchema):
+    client_request_id: UUID
+
+
+class ReminderArchiveResponse(StrictSchema):
+    command_id: UUID
+    archived: bool
+    archived_at: datetime

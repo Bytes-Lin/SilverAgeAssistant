@@ -1,17 +1,20 @@
 from datetime import datetime
 from typing import cast
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     AuditLog,
     Binding,
     Command,
+    CommandCompletion,
     CommandReceipt,
     DeviceCredential,
     ElderProfile,
     FamilyAccount,
+    IdempotencyRecord,
+    ReminderArchive,
 )
 
 
@@ -159,6 +162,161 @@ class CommandRepository:
         self.session.add(receipt)
         await self.session.flush()
         return receipt
+
+    async def get_completion(self, command_id: str) -> CommandCompletion | None:
+        return await self.session.get(CommandCompletion, command_id)
+
+    async def get_completion_by_request(
+        self, client_request_id: str
+    ) -> CommandCompletion | None:
+        query = select(CommandCompletion).where(
+            CommandCompletion.client_request_id == client_request_id
+        )
+        return (await self.session.scalars(query)).one_or_none()
+
+    async def create_completion(
+        self,
+        *,
+        command_id: str,
+        elder_id: str,
+        device_id: str,
+        client_request_id: str,
+        completed_at: datetime,
+        reported_at: datetime,
+    ) -> CommandCompletion:
+        completion = CommandCompletion(
+            command_id=command_id,
+            elder_id=elder_id,
+            device_id=device_id,
+            status="COMPLETED",
+            client_request_id=client_request_id,
+            completed_at=completed_at,
+            reported_at=reported_at,
+        )
+        self.session.add(completion)
+        await self.session.flush()
+        return completion
+
+    async def list_reminders_for_family(
+        self,
+        family_id: str,
+        elder_id: str,
+        limit: int,
+        cursor_scheduled_at: datetime | None,
+        cursor_command_id: str | None,
+    ) -> list[Command]:
+        filters = [
+            Command.elder_id == elder_id,
+            Command.command_type == "REMOTE_REMINDER",
+            Command.scheduled_at.is_not(None),
+            ~select(ReminderArchive.id)
+            .where(
+                ReminderArchive.family_account_id == family_id,
+                ReminderArchive.command_id == Command.id,
+            )
+            .exists(),
+        ]
+        if cursor_scheduled_at is not None and cursor_command_id is not None:
+            filters.append(
+                or_(
+                    Command.scheduled_at < cursor_scheduled_at,
+                    and_(
+                        Command.scheduled_at == cursor_scheduled_at,
+                        Command.id < cursor_command_id,
+                    ),
+                )
+            )
+        query = (
+            select(Command)
+            .where(*filters)
+            .order_by(Command.scheduled_at.desc(), Command.id.desc())
+            .limit(limit)
+        )
+        return list((await self.session.scalars(query)).all())
+
+    async def list_first_stored_at(self, command_ids: list[str]) -> dict[str, datetime]:
+        if not command_ids:
+            return {}
+        query = (
+            select(CommandReceipt.command_id, func.min(CommandReceipt.stored_at))
+            .where(
+                CommandReceipt.command_id.in_(command_ids),
+                CommandReceipt.ack_type == "STORED",
+            )
+            .group_by(CommandReceipt.command_id)
+        )
+        rows = (await self.session.execute(query)).all()
+        return {command_id: stored_at for command_id, stored_at in rows}
+
+    async def list_completions(self, command_ids: list[str]) -> dict[str, CommandCompletion]:
+        if not command_ids:
+            return {}
+        query = select(CommandCompletion).where(CommandCompletion.command_id.in_(command_ids))
+        return {
+            completion.command_id: completion
+            for completion in (await self.session.scalars(query)).all()
+        }
+
+    async def get_archive_by_request(
+        self, family_id: str, client_request_id: str
+    ) -> ReminderArchive | None:
+        actor_scope = f"family:{family_id}"
+        command_id = await self.session.scalar(
+            select(IdempotencyRecord.resource_id).where(
+                IdempotencyRecord.actor_scope == actor_scope,
+                IdempotencyRecord.operation == "REMINDER_ARCHIVE",
+                IdempotencyRecord.client_request_id == client_request_id,
+            )
+        )
+        if command_id is not None:
+            return await self.get_archive_by_command(family_id, command_id)
+        query = select(ReminderArchive).where(
+            ReminderArchive.family_account_id == family_id,
+            ReminderArchive.client_request_id == client_request_id,
+        )
+        return (await self.session.scalars(query)).one_or_none()
+
+    async def get_archive_by_command(
+        self, family_id: str, command_id: str
+    ) -> ReminderArchive | None:
+        query = select(ReminderArchive).where(
+            ReminderArchive.family_account_id == family_id,
+            ReminderArchive.command_id == command_id,
+        )
+        return (await self.session.scalars(query)).one_or_none()
+
+    async def create_archive(
+        self,
+        *,
+        family_id: str,
+        elder_id: str,
+        command_id: str,
+        client_request_id: str,
+        archived_at: datetime,
+    ) -> ReminderArchive:
+        archive = ReminderArchive(
+            family_account_id=family_id,
+            elder_id=elder_id,
+            command_id=command_id,
+            client_request_id=client_request_id,
+            archived_at=archived_at,
+        )
+        self.session.add(archive)
+        await self.session.flush()
+        return archive
+
+    async def record_archive_request(
+        self, family_id: str, client_request_id: str, command_id: str
+    ) -> None:
+        self.session.add(
+            IdempotencyRecord(
+                actor_scope=f"family:{family_id}",
+                operation="REMINDER_ARCHIVE",
+                client_request_id=client_request_id,
+                resource_id=command_id,
+            )
+        )
+        await self.session.flush()
 
     def add_audit(
         self,

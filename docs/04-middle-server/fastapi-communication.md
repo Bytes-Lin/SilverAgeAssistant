@@ -57,9 +57,29 @@ REST 获取详情。用量即时刷新复用该连接发送 `MODEL_USAGE_REPORT_
 REST 补拉并热更新。家属可使用短期 access token 建立同一路径
 连接；安全事件提交并落库后，仅向存在有效绑定和查看权限的家属发送
 `SAFETY_EVENT_AVAILABLE`，提示中不包含事件摘要。
+老人确认一次性提醒完成并写库后，可向创建提醒的在线家属发送
+`REMINDER_STATUS_CHANGED`；提示只携带 `elder_id` 和 `command_id`，家属端通过 REST 查询
+提醒记录，WebSocket 失败不影响完成状态。
+Android 已在 `REMINDER_STATUS_CHANGED`、连接/重连和应用回前台时自动查询提醒记录；老人端也在
+`COMMAND_AVAILABLE`、连接/重连和回前台时自动补拉命令。两端均合并并发刷新且不做短周期轮询。
+家属提醒记录的账号级归档仅完成 Android 请求接入，中台 archive 路由与查询过滤仍待交付。
 事件证据图像通过独立二进制 REST 接口上传和读取，不进入 WebSocket。图像保存并生成缩略图后，
 中台向有权限的在线家属发送 `SAFETY_EVENT_IMAGE_AVAILABLE`，只携带 `elder_id` 和 `event_id`；
 家属端再次 REST 补拉事件元数据，再按需读取缩略图或原图。
+
+### 本机用户管理页面
+
+中台可选提供 `/admin` 用户管理页面，普通 API 启动时默认关闭且仅允许回环地址访问。页面
+默认展示全部家属—老人绑定对（包括已撤销记录），也支持按双方姓名或完整手机号筛选。
+管理员可修改有效绑定的双方称呼和关系；手机号不允许修改。删除时直接在对应卡片输入家属
+完整手机号二次确认，中台将物理删除该家属、其创建的全部老人及关联业务数据，释放手机号
+供 App 重新注册；不再提供独立的 `RESET` 重置区域或软撤销按钮。
+不查询或展示通知、提醒、安全事件、图像、模型配置、模型用量及任何凭据。详细隐私边界和
+本地启用方式见 [`admin-user-management.md`](admin-user-management.md)。
+
+`app.admin_launcher` 启动的是包含业务 REST、WebSocket 和管理页面的同一个 FastAPI 应用。
+使用 `--host 0.0.0.0` 可让业务接口监听外部网卡，但管理路由仍校验请求来源，只允许本机
+回环访问；公网反向代理必须额外显式阻断 `/admin`。
 
 聊天 Agent 的 `report_family_situation` 与后续状态监控 Agent 复用同一设备事件接口。中台
 允许 `HEALTH_DISCOMFORT_REPORTED` 和 `FAMILY_REQUEST` 使用忠实描述老人原话的摘要；
@@ -224,6 +244,8 @@ MiddleServer/app/
 
 - `SILVERAGE_DATABASE_URL`：异步 SQLite URL；
 - `SILVERAGE_AUTO_CREATE_SCHEMA`：是否在启动时自动建表，默认关闭；正常开发使用 Alembic；
+- `SILVERAGE_ADMIN_ENABLED`：是否挂载可访问的本机管理页面；普通启动默认关闭，`app.admin_launcher` 自动启用；
+- `SILVERAGE_ADMIN_SESSION_TTL_SECONDS`：管理员内存会话有效期，默认 28800 秒；允许 300—86400 秒；
 - `SILVERAGE_JWT_SECRET`：家属 JWT 签名密钥；
 - `SILVERAGE_SECURITY_SECRET`：绑定码、设备凭证和限流摘要密钥；
 - `SILVERAGE_BINDING_CODE_TTL_SECONDS`：绑定码有效期，默认 600 秒。
@@ -242,3 +264,12 @@ MiddleServer/app/
 - `SILVERAGE_SAFETY_IMAGE_DOWNLOAD_PER_MINUTE_LIMIT`：单家属、单事件每分钟图片读取上限，默认 60。
 
 仓库内的默认密钥只允许本机开发。非 development 环境若仍使用默认密钥，服务将拒绝启动。真实部署必须由 TLS 反向代理提供 HTTPS。
+
+业务接口与管理页面的联合启动示例：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.admin_launcher --host 0.0.0.0 --port 8765
+```
+
+该启动器默认不打开浏览器；添加 `--open-browser` 才会打开管理登录页。Android 连接服务器
+实际可达的 IP 或域名；服务器本机使用 `http://127.0.0.1:8765/admin` 管理绑定关系。

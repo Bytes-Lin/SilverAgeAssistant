@@ -23,6 +23,9 @@ async def test_openapi_contains_binding_contract(api: ApiFixture) -> None:
         "/api/v1/elders/{elder_id}/commands/reminders",
         "/api/v1/commands/pending",
         "/api/v1/commands/{command_id}/ack",
+        "/api/v1/commands/{command_id}/completion",
+        "/api/v1/elders/{elder_id}/reminders",
+        "/api/v1/elders/{elder_id}/reminders/{command_id}/archive",
         "/api/v1/devices/me/family-contacts",
         "/api/v1/elders/{elder_id}/model-config",
         "/api/v1/devices/me/model-config",
@@ -53,6 +56,46 @@ async def test_openapi_contains_binding_contract(api: ApiFixture) -> None:
     assert idempotency_parameter["required"] is True
     notification_schema = document["components"]["schemas"]["NotificationCreateRequest"]
     assert notification_schema["properties"]["content"]["maxLength"] == 200
+    completion_operation = paths["/api/v1/commands/{command_id}/completion"]["post"]
+    assert completion_operation["security"] == [{"HTTPBearer": []}]
+    assert {"400", "401", "404", "409", "410"}.issubset(completion_operation["responses"])
+    completion_idempotency = next(
+        parameter
+        for parameter in completion_operation["parameters"]
+        if parameter["name"] == "Idempotency-Key"
+    )
+    assert completion_idempotency["required"] is True
+    completion_schema = document["components"]["schemas"]["ReminderCompletionRequest"]
+    assert set(completion_schema["required"]) == {
+        "client_request_id",
+        "status",
+        "completed_at",
+    }
+    completion_status = document["components"]["schemas"]["CompletionStatus"]
+    assert completion_status["enum"] == ["COMPLETED"]
+    history_operation = paths["/api/v1/elders/{elder_id}/reminders"]["get"]
+    assert history_operation["security"] == [{"HTTPBearer": []}]
+    assert {"400", "401", "403", "410"}.issubset(history_operation["responses"])
+    history_limit = next(
+        parameter for parameter in history_operation["parameters"] if parameter["name"] == "limit"
+    )
+    assert history_limit["schema"]["minimum"] == 1
+    assert history_limit["schema"]["maximum"] == 100
+    archive_operation = paths[
+        "/api/v1/elders/{elder_id}/reminders/{command_id}/archive"
+    ]["post"]
+    assert archive_operation["security"] == [{"HTTPBearer": []}]
+    assert {"400", "401", "403", "404", "409", "410"}.issubset(
+        archive_operation["responses"]
+    )
+    archive_idempotency = next(
+        parameter
+        for parameter in archive_operation["parameters"]
+        if parameter["name"] == "Idempotency-Key"
+    )
+    assert archive_idempotency["required"] is True
+    archive_request = document["components"]["schemas"]["ReminderArchiveRequest"]
+    assert set(archive_request["required"]) == {"client_request_id"}
     contacts_operation = paths["/api/v1/devices/me/family-contacts"]["get"]
     assert contacts_operation["security"] == [{"HTTPBearer": []}]
     assert {"401", "403", "503"}.issubset(contacts_operation["responses"])

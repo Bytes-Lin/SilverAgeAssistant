@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import RequestResponseEndpoint
 
+from app.api.admin import router as admin_router
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.database import Database
@@ -72,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             or "/model-usage" in request.url.path
             or "/safety-monitoring/" in request.url.path
             or "/safety-events" in request.url.path
+            or request.url.path.endswith("/reminders")
         ) and "Cache-Control" not in response.headers:
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -207,6 +209,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(api_router)
+    app.include_router(admin_router)
     return app
 
 

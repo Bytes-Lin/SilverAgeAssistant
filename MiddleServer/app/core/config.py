@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./silverage.db"
     auto_create_schema: bool = False
 
+    admin_enabled: bool = False
+    admin_page_size: int = 20
+    admin_session_ttl_seconds: int = 28_800
+
     jwt_secret: str = "local-development-jwt-secret-change-before-deployment"
     security_secret: str = "local-development-security-secret-change-before-deployment"
     access_token_ttl_seconds: int = 1800
@@ -44,6 +48,11 @@ class Settings(BaseSettings):
             )
             if any(insecure_values):
                 raise ValueError("non-development environments require explicit secrets")
+        if self.admin_enabled:
+            if not 1 <= self.admin_page_size <= 50:
+                raise ValueError("admin_page_size must be between 1 and 50")
+            if not 300 <= self.admin_session_ttl_seconds <= 86_400:
+                raise ValueError("admin_session_ttl_seconds must be between 300 and 86400")
         return self
 
 

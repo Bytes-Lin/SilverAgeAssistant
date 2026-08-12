@@ -466,6 +466,46 @@ class CommandReceipt(Base):
     acked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class CommandCompletion(Base):
+    __tablename__ = "command_completions"
+    __table_args__ = (
+        CheckConstraint("status = 'COMPLETED'", name="ck_command_completion_status"),
+    )
+
+    command_id: Mapped[str] = mapped_column(
+        ForeignKey("commands.id", ondelete="CASCADE"), primary_key=True
+    )
+    elder_id: Mapped[str] = mapped_column(ForeignKey("elder_profiles.id"), index=True)
+    device_id: Mapped[str] = mapped_column(ForeignKey("device_credentials.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20))
+    client_request_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ReminderArchive(Base):
+    __tablename__ = "reminder_archives"
+    __table_args__ = (
+        UniqueConstraint(
+            "family_account_id",
+            "command_id",
+            name="uq_reminder_archives_family_command",
+        ),
+        UniqueConstraint(
+            "family_account_id",
+            "client_request_id",
+            name="uq_reminder_archives_family_request",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    family_account_id: Mapped[str] = mapped_column(ForeignKey("family_accounts.id"), index=True)
+    elder_id: Mapped[str] = mapped_column(ForeignKey("elder_profiles.id"), index=True)
+    command_id: Mapped[str] = mapped_column(ForeignKey("commands.id"), index=True)
+    client_request_id: Mapped[str] = mapped_column(String(36))
+    archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class IdempotencyRecord(Base):
     __tablename__ = "idempotency_records"
     __table_args__ = (

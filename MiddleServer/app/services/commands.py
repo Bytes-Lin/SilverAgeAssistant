@@ -1,8 +1,10 @@
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -11,7 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.errors import ApiError
 from app.core.security import ensure_utc, utc_now
-from app.models import Binding, Command, DeviceCredential, FamilyAccount
+from app.models import (
+    Binding,
+    Command,
+    CommandCompletion,
+    DeviceCredential,
+    FamilyAccount,
+    ReminderArchive,
+)
 from app.repositories.commands import CommandRepository
 from app.schemas.command import (
     AckType,
@@ -21,15 +30,31 @@ from app.schemas.command import (
     CommandSender,
     CommandStatus,
     CommandType,
+    CompletionStatus,
+    DeliveryStatus,
     NotificationCreateRequest,
     PendingCommand,
     PendingCommandsResponse,
+    ReminderArchiveRequest,
+    ReminderArchiveResponse,
+    ReminderCompletionRequest,
+    ReminderCompletionResponse,
+    ReminderCompletionState,
     ReminderCreateRequest,
+    ReminderHistoryItem,
+    ReminderHistoryResponse,
 )
 
 
 class CommandNotifier(Protocol):
     async def notify_command(self, command: Command) -> None: ...
+
+    async def notify_reminder_status_changed(
+        self,
+        family_ids: set[str],
+        elder_id: str,
+        command_id: str,
+    ) -> bool: ...
 
 
 class CommandService:
@@ -253,6 +278,196 @@ class CommandService:
             acked_at=ensure_utc(existing.acked_at),
         )
 
+    async def complete_reminder(
+        self,
+        device: DeviceCredential,
+        command_id: str,
+        request: ReminderCompletionRequest,
+        idempotency_key: str | None,
+    ) -> ReminderCompletionResponse:
+        self._validate_idempotency_key(idempotency_key, request.client_request_id)
+        completed_at = self._require_completion_utc(request.completed_at)
+        now = utc_now()
+        if completed_at > now + timedelta(seconds=self.settings.command_client_clock_skew_seconds):
+            raise ApiError(400, "REQUEST_VALIDATION_ERROR", "完成时间不正确")
+        created = False
+
+        async with self.command_lock:
+            async with self.session.begin():
+                binding = await self.repository.get_active_binding_for_device(device)
+                if binding is None:
+                    raise ApiError(410, "BINDING_REVOKED", "绑定关系已撤销")
+                command = await self.repository.get_command(command_id)
+                if (
+                    command is None
+                    or command.elder_id != device.elder_id
+                    or command.binding_id != device.binding_id
+                ):
+                    raise ApiError(404, "COMMAND_NOT_FOUND", "命令不存在")
+                if command.command_type != CommandType.REMOTE_REMINDER.value:
+                    raise ApiError(400, "COMMAND_NOT_COMPLETABLE", "该命令不能确认完成")
+
+                request_id = str(request.client_request_id)
+                by_request = await self.repository.get_completion_by_request(request_id)
+                completion: CommandCompletion
+                if by_request is not None:
+                    if not self._same_completion_request(
+                        by_request,
+                        command_id=command.id,
+                        device_id=device.id,
+                        completed_at=completed_at,
+                    ):
+                        raise ApiError(
+                            409,
+                            "IDEMPOTENCY_CONFLICT",
+                            "同一请求标识对应了不同内容",
+                        )
+                    completion = by_request
+                else:
+                    existing_completion = await self.repository.get_completion(command.id)
+                    if existing_completion is None:
+                        completion = await self.repository.create_completion(
+                            command_id=command.id,
+                            elder_id=device.elder_id,
+                            device_id=device.id,
+                            client_request_id=request_id,
+                            completed_at=completed_at,
+                            reported_at=now,
+                        )
+                        self.repository.add_audit(
+                            "REMINDER_COMPLETED",
+                            "DEVICE",
+                            device.id,
+                            "COMMAND",
+                            command.id,
+                            {"elder_id": device.elder_id, "status": "COMPLETED"},
+                        )
+                        created = True
+                    else:
+                        completion = existing_completion
+
+        if created:
+            try:
+                await self.notifier.notify_reminder_status_changed(
+                    {command.actor_family_id}, command.elder_id, command.id
+                )
+            except Exception:
+                pass
+        return self._completion_response(completion)
+
+    async def list_reminder_history(
+        self,
+        family: FamilyAccount,
+        elder_id: str,
+        limit: int,
+        cursor: str | None,
+    ) -> ReminderHistoryResponse:
+        cursor_scheduled_at, cursor_command_id = self._decode_reminder_cursor(cursor)
+        async with self.session.begin():
+            await self._require_family_read_binding(family.id, elder_id)
+            commands = await self.repository.list_reminders_for_family(
+                family.id,
+                elder_id,
+                limit + 1,
+                cursor_scheduled_at,
+                cursor_command_id,
+            )
+            has_more = len(commands) > limit
+            page = commands[:limit]
+            command_ids = [command.id for command in page]
+            stored_at_by_command = await self.repository.list_first_stored_at(command_ids)
+            completion_by_command = await self.repository.list_completions(command_ids)
+
+        reminders: list[ReminderHistoryItem] = []
+        for command in page:
+            stored_at = stored_at_by_command.get(command.id)
+            completion = completion_by_command.get(command.id)
+            reminders.append(
+                ReminderHistoryItem(
+                    command_id=UUID(command.id),
+                    title=cast(str, command.title),
+                    content=command.content,
+                    scheduled_at=ensure_utc(cast(datetime, command.scheduled_at)),
+                    timezone=command.timezone,
+                    created_at=ensure_utc(command.created_at),
+                    delivery_status=(
+                        DeliveryStatus.STORED if stored_at else DeliveryStatus.PENDING
+                    ),
+                    completion_status=(
+                        ReminderCompletionState.COMPLETED
+                        if completion
+                        else ReminderCompletionState.PENDING
+                    ),
+                    stored_at=ensure_utc(stored_at) if stored_at else None,
+                    completed_at=(
+                        ensure_utc(completion.completed_at) if completion else None
+                    ),
+                )
+            )
+        next_cursor = None
+        if has_more and page:
+            last = page[-1]
+            next_cursor = self._encode_reminder_cursor(
+                ensure_utc(cast(datetime, last.scheduled_at)), last.id
+            )
+        return ReminderHistoryResponse(reminders=reminders, next_cursor=next_cursor)
+
+    async def archive_reminder(
+        self,
+        family: FamilyAccount,
+        elder_id: str,
+        command_id: str,
+        request: ReminderArchiveRequest,
+        idempotency_key: str | None,
+    ) -> ReminderArchiveResponse:
+        self._validate_idempotency_key(idempotency_key, request.client_request_id)
+        request_id = str(request.client_request_id)
+        async with self.command_lock:
+            async with self.session.begin():
+                await self._require_family_read_binding(family.id, elder_id)
+                by_request = await self.repository.get_archive_by_request(family.id, request_id)
+                if by_request is not None and (
+                    by_request.command_id != command_id or by_request.elder_id != elder_id
+                ):
+                    raise ApiError(
+                        409,
+                        "IDEMPOTENCY_CONFLICT",
+                        "同一请求标识对应了不同提醒",
+                    )
+                command = await self.repository.get_command(command_id)
+                if command is None or command.elder_id != elder_id:
+                    raise ApiError(404, "COMMAND_NOT_FOUND", "提醒记录不存在")
+                if command.command_type != CommandType.REMOTE_REMINDER.value:
+                    raise ApiError(400, "COMMAND_NOT_ARCHIVABLE", "该命令不是提醒记录")
+
+                archive: ReminderArchive
+                if by_request is not None:
+                    archive = by_request
+                else:
+                    existing = await self.repository.get_archive_by_command(family.id, command.id)
+                    if existing is not None:
+                        archive = existing
+                    else:
+                        archive = await self.repository.create_archive(
+                            family_id=family.id,
+                            elder_id=elder_id,
+                            command_id=command.id,
+                            client_request_id=request_id,
+                            archived_at=utc_now(),
+                        )
+                        self.repository.add_audit(
+                            "REMINDER_ARCHIVED",
+                            "FAMILY",
+                            family.id,
+                            "COMMAND",
+                            command.id,
+                            {"elder_id": elder_id},
+                        )
+                    await self.repository.record_archive_request(
+                        family.id, request_id, command.id
+                    )
+        return self._archive_response(archive)
+
     async def _require_family_binding(self, family_id: str, elder_id: str) -> Binding:
         elder = await self.repository.get_elder(elder_id)
         binding = await self.repository.get_latest_binding_for_family(family_id, elder_id)
@@ -262,6 +477,17 @@ class CommandService:
             raise ApiError(410, "BINDING_REVOKED", "绑定关系已撤销")
         if not ({"HELPER", "OWNER"} & set(binding.permissions)):
             raise ApiError(403, "COMMAND_FORBIDDEN", "没有发送通知或提醒的权限")
+        return binding
+
+    async def _require_family_read_binding(self, family_id: str, elder_id: str) -> Binding:
+        elder = await self.repository.get_elder(elder_id)
+        binding = await self.repository.get_latest_binding_for_family(family_id, elder_id)
+        if elder is None or not elder.is_active or binding is None:
+            raise ApiError(403, "COMMAND_FORBIDDEN", "没有查看提醒记录的权限")
+        if binding.revoked_at is not None:
+            raise ApiError(410, "BINDING_REVOKED", "绑定关系已撤销")
+        if not ({"VIEWER", "HELPER", "OWNER"} & set(binding.permissions)):
+            raise ApiError(403, "COMMAND_FORBIDDEN", "没有查看提醒记录的权限")
         return binding
 
     async def _enforce_rate_limit(self, family_id: str, elder_id: str) -> None:
@@ -299,6 +525,12 @@ class CommandService:
         return value.astimezone(UTC)
 
     @staticmethod
+    def _require_completion_utc(value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ApiError(400, "REQUEST_VALIDATION_ERROR", "完成时间必须使用 UTC")
+        return value.astimezone(UTC)
+
+    @staticmethod
     def _validate_idempotency_key(value: str | None, request_id: UUID) -> None:
         try:
             header_id = UUID(value) if value else None
@@ -329,6 +561,69 @@ class CommandService:
         }
         encoded = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode()).hexdigest()
+
+    @staticmethod
+    def _same_completion_request(
+        completion: CommandCompletion,
+        *,
+        command_id: str,
+        device_id: str,
+        completed_at: datetime,
+    ) -> bool:
+        return (
+            completion.command_id == command_id
+            and completion.device_id == device_id
+            and completion.status == CompletionStatus.COMPLETED.value
+            and ensure_utc(completion.completed_at) == completed_at
+        )
+
+    @staticmethod
+    def _completion_response(completion: CommandCompletion) -> ReminderCompletionResponse:
+        return ReminderCompletionResponse(
+            command_id=UUID(completion.command_id),
+            status=CompletionStatus(completion.status),
+            completed_at=ensure_utc(completion.completed_at),
+            reported_at=ensure_utc(completion.reported_at),
+        )
+
+    @staticmethod
+    def _archive_response(archive: ReminderArchive) -> ReminderArchiveResponse:
+        return ReminderArchiveResponse(
+            command_id=UUID(archive.command_id),
+            archived=True,
+            archived_at=ensure_utc(archive.archived_at),
+        )
+
+    @staticmethod
+    def _encode_reminder_cursor(scheduled_at: datetime, command_id: str) -> str:
+        payload = json.dumps(
+            {"scheduled_at": scheduled_at.isoformat(), "command_id": command_id},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
+
+    @classmethod
+    def _decode_reminder_cursor(cls, cursor: str | None) -> tuple[datetime | None, str | None]:
+        if cursor is None:
+            return None, None
+        try:
+            padding = "=" * (-len(cursor) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(cursor + padding))
+            if not isinstance(payload, dict) or set(payload) != {"scheduled_at", "command_id"}:
+                raise ValueError
+            scheduled_at = datetime.fromisoformat(str(payload["scheduled_at"]))
+            scheduled_at = cls._require_completion_utc(scheduled_at)
+            command_id = str(UUID(str(payload["command_id"])))
+        except (
+            ValueError,
+            TypeError,
+            UnicodeDecodeError,
+            binascii.Error,
+            json.JSONDecodeError,
+        ) as exc:
+            raise ApiError(400, "REQUEST_VALIDATION_ERROR", "提醒记录游标不正确") from exc
+        return scheduled_at, command_id
 
     @staticmethod
     def _create_response(command: Command) -> CommandCreateResponse:

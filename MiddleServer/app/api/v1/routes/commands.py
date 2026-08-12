@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, status
@@ -21,11 +21,41 @@ from app.schemas.command import (
     CommandCreateResponse,
     NotificationCreateRequest,
     PendingCommandsResponse,
+    ReminderArchiveRequest,
+    ReminderArchiveResponse,
+    ReminderCompletionRequest,
+    ReminderCompletionResponse,
     ReminderCreateRequest,
+    ReminderHistoryResponse,
 )
+from app.schemas.common import ErrorResponse
 from app.services.commands import CommandNotifier, CommandService
 
 router = APIRouter(tags=["family-commands"])
+
+completion_error_responses: dict[int | str, dict[str, Any]] = {
+    400: {"model": ErrorResponse, "description": "Completion request is invalid"},
+    401: {"model": ErrorResponse, "description": "Device authentication is required"},
+    404: {"model": ErrorResponse, "description": "Command is not available to this device"},
+    409: {"model": ErrorResponse, "description": "Idempotency conflict"},
+    410: {"model": ErrorResponse, "description": "The binding has been revoked"},
+}
+
+history_error_responses: dict[int | str, dict[str, Any]] = {
+    400: {"model": ErrorResponse, "description": "History cursor is invalid"},
+    401: {"model": ErrorResponse, "description": "Family authentication is required"},
+    403: {"model": ErrorResponse, "description": "Reminder history access is forbidden"},
+    410: {"model": ErrorResponse, "description": "The binding has been revoked"},
+}
+
+archive_error_responses: dict[int | str, dict[str, Any]] = {
+    400: {"model": ErrorResponse, "description": "The command is not archivable"},
+    401: {"model": ErrorResponse, "description": "Family authentication is required"},
+    403: {"model": ErrorResponse, "description": "Reminder access is forbidden"},
+    404: {"model": ErrorResponse, "description": "Reminder is not available"},
+    409: {"model": ErrorResponse, "description": "Idempotency conflict"},
+    410: {"model": ErrorResponse, "description": "The binding has been revoked"},
+}
 
 
 def service(
@@ -105,4 +135,69 @@ async def acknowledge_command(
 ) -> CommandAckResponse:
     return await service(session, settings, database, notifier).acknowledge(
         device, str(command_id), payload, idempotency_key
+    )
+
+
+@router.post(
+    "/commands/{command_id}/completion",
+    response_model=ReminderCompletionResponse,
+    responses=completion_error_responses,
+)
+async def complete_reminder(
+    command_id: UUID,
+    payload: ReminderCompletionRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    device: DeviceCredential = Depends(get_current_device),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_request_settings),
+    database: Database = Depends(get_database),
+    notifier: CommandNotifier = Depends(get_connection_manager),
+) -> ReminderCompletionResponse:
+    return await service(session, settings, database, notifier).complete_reminder(
+        device, str(command_id), payload, idempotency_key
+    )
+
+
+@router.get(
+    "/elders/{elder_id}/reminders",
+    response_model=ReminderHistoryResponse,
+    responses=history_error_responses,
+)
+async def list_reminder_history(
+    elder_id: UUID,
+    limit: int = Query(default=100, ge=1, le=100),
+    cursor: str | None = Query(default=None, min_length=1, max_length=500),
+    family: FamilyAccount = Depends(get_current_family),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_request_settings),
+    database: Database = Depends(get_database),
+    notifier: CommandNotifier = Depends(get_connection_manager),
+) -> ReminderHistoryResponse:
+    return await service(session, settings, database, notifier).list_reminder_history(
+        family, str(elder_id), limit, cursor
+    )
+
+
+@router.post(
+    "/elders/{elder_id}/reminders/{command_id}/archive",
+    response_model=ReminderArchiveResponse,
+    responses=archive_error_responses,
+)
+async def archive_reminder(
+    elder_id: UUID,
+    command_id: UUID,
+    payload: ReminderArchiveRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    family: FamilyAccount = Depends(get_current_family),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_request_settings),
+    database: Database = Depends(get_database),
+    notifier: CommandNotifier = Depends(get_connection_manager),
+) -> ReminderArchiveResponse:
+    return await service(session, settings, database, notifier).archive_reminder(
+        family,
+        str(elder_id),
+        str(command_id),
+        payload,
+        idempotency_key,
     )

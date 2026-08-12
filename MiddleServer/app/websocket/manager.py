@@ -48,6 +48,29 @@ class ConnectionManager:
                 if not self._family_connections[family_id]:
                     self._family_connections.pop(family_id, None)
 
+    async def disconnect_user_data(
+        self,
+        family_id: str,
+        elder_ids: frozenset[str],
+        device_ids: frozenset[str],
+    ) -> None:
+        async with self._lock:
+            family_targets = list(self._family_connections.pop(family_id, {}).values())
+            device_targets: list[WebSocket] = []
+            for elder_id in elder_ids:
+                connections = self._connections.get(elder_id, {})
+                for device_id in device_ids:
+                    websocket = connections.pop(device_id, None)
+                    if websocket is not None:
+                        device_targets.append(websocket)
+                if not connections:
+                    self._connections.pop(elder_id, None)
+        for websocket in [*family_targets, *device_targets]:
+            try:
+                await websocket.close(code=1008)
+            except Exception:
+                pass
+
     async def notify_command(self, command: Command) -> None:
         async with self._lock:
             targets = list(self._connections.get(command.elder_id, {}).items())
@@ -194,6 +217,37 @@ class ConnectionManager:
             "event_id": event_id,
             "server_sequence": server_sequence,
             "severity": severity,
+        }
+        delivered = False
+        disconnected: list[tuple[str, str, WebSocket]] = []
+        for family_id, connection_id, websocket in targets:
+            try:
+                await websocket.send_json(message)
+                delivered = True
+            except Exception:
+                disconnected.append((family_id, connection_id, websocket))
+        for family_id, connection_id, websocket in disconnected:
+            await self.disconnect_family(family_id, connection_id, websocket)
+        return delivered
+
+    async def notify_reminder_status_changed(
+        self,
+        family_ids: set[str],
+        elder_id: str,
+        command_id: str,
+    ) -> bool:
+        async with self._lock:
+            targets = [
+                (family_id, connection_id, websocket)
+                for family_id in family_ids
+                for connection_id, websocket in self._family_connections.get(family_id, {}).items()
+            ]
+        message = {
+            "protocol_version": 1,
+            "message_type": "REMINDER_STATUS_CHANGED",
+            "message_id": str(uuid.uuid4()),
+            "sent_at": utc_now().isoformat().replace("+00:00", "Z"),
+            "payload": {"elder_id": elder_id, "command_id": command_id},
         }
         delivered = False
         disconnected: list[tuple[str, str, WebSocket]] = []
