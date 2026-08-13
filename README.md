@@ -5,6 +5,8 @@
 同一个 APK 同时提供老人模式与家属模式；老人设备直接调用用户配置的 MLLM、ASR 和 TTS 服务，FastAPI 中台只负责身份绑定、跨端通知、提醒、状态事件、配置和用量同步，不代理日常模型流量。
 
 > 当前状态：功能原型持续开发中，尚未达到正式发布或医疗级产品标准。完整介绍见[项目完整说明](docs/00-product/project-description.md)，逐项进度见[开发路线图](docs/08-roadmap/roadmap.md)和[开发 TODO](docs/08-roadmap/todo.md)。
+>
+> 安卓安装包下载地址：https://modelscope.cn/models/Acede1/SilverAgeAssistant
 
 ## 核心能力
 
