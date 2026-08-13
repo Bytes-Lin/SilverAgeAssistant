@@ -3,6 +3,7 @@ package com.example.silverageassistant
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -69,7 +70,7 @@ class ConversationScreenTest {
     }
 
     @Test
-    fun handwritingMode_explainsHowToUseSystemHandwritingKeyboard() {
+    fun handwritingMode_focusesInputAndRequestsSystemHandwriting() {
         val viewModel = conversationViewModel()
         composeRule.runOnUiThread {
             composeRule.activity.setContent {
@@ -82,8 +83,26 @@ class ConversationScreenTest {
         composeRule.onNodeWithText("手写").performClick()
 
         composeRule.onNodeWithText("在系统手写键盘中书写").assertIsDisplayed()
-        composeRule.onNodeWithText("请在手机键盘中切换到“手写”，识别结果会显示在这里。")
+        composeRule.onNodeWithText("系统输入法已打开；支持原生手写时会直接进入手写。")
             .assertIsDisplayed()
+        composeRule.onNodeWithTag(ConversationTestTags.TEXT_INPUT).assertIsFocused()
+    }
+
+    @Test
+    fun keyboardButton_focusesTextInputEvenWhenAlreadySelected() {
+        val viewModel = conversationViewModel()
+        composeRule.runOnUiThread {
+            composeRule.activity.setContent {
+                SilverAgeAssistantTheme {
+                    ConversationRoute(onBack = {}, viewModel = viewModel)
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("打字").performClick()
+
+        composeRule.onNodeWithTag(ConversationTestTags.TEXT_INPUT).assertIsFocused()
+        composeRule.onNodeWithText("输入想说的话").assertIsDisplayed()
     }
 
     private fun conversationViewModel(): ConversationViewModel {

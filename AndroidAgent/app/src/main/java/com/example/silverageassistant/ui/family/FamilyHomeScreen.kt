@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -46,6 +45,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.silverageassistant.ui.components.ElderScreenScaffold
 import com.example.silverageassistant.ui.components.LargeActionButton
@@ -61,7 +61,6 @@ import java.time.format.DateTimeFormatter
 
 private data class FamilyFeatureAction(
     val title: String,
-    val subtitle: String,
     val icon: ImageVector,
     val onClick: (() -> Unit)? = null,
     val requiresBinding: Boolean = false,
@@ -100,56 +99,48 @@ fun FamilyHomeScreen(
     val actions = listOf(
         FamilyFeatureAction(
             "今日状态",
-            "查看老人今天的一般状态通知",
             Icons.Rounded.Favorite,
             onTodayStatus,
             requiresBinding = true,
         ),
         FamilyFeatureAction(
             "发送通知",
-            "给老人发送简短消息",
             Icons.AutoMirrored.Rounded.Message,
             onSendNotification,
             requiresBinding = true,
         ),
         FamilyFeatureAction(
             "创建提醒",
-            "为老人准备本地提醒指令",
             Icons.Rounded.AddAlert,
             onCreateReminder,
             requiresBinding = true,
         ),
         FamilyFeatureAction(
             "提醒记录",
-            "查看全部提醒及完成状态",
             Icons.AutoMirrored.Rounded.EventNote,
             onReminderHistory,
             requiresBinding = true,
         ),
         FamilyFeatureAction(
             "模型配置",
-            "为老人设置模型地址和生成参数",
             Icons.Rounded.Settings,
             onModelConfiguration,
             requiresBinding = true,
         ),
         FamilyFeatureAction(
             "模型用量",
-            "查看输入、输出与语音调用次数",
             Icons.Rounded.BarChart,
             onModelUsage,
             requiresBinding = true,
         ),
         FamilyFeatureAction(
-            "状态检测设置",
-            "设置老人手机的安全检测间隔",
+            "状态检测",
             Icons.Rounded.Settings,
             onSafetyMonitoringConfiguration,
             requiresBinding = true,
         ),
         FamilyFeatureAction(
             "紧急事件",
-            "查看疑似跌倒、晕倒等紧急通知",
             Icons.Rounded.Emergency,
             onEmergencyEvents,
             requiresBinding = true,
@@ -222,35 +213,49 @@ fun FamilyHomeScreen(
                     }
                 }
             }
-            item {
-                Text("家庭协助", style = MaterialTheme.typography.headlineMedium)
-            }
-            items(actions, key = { it.title }) { action ->
-                FamilyFeatureCard(
-                    action = action,
-                    onClick = {
-                        if (action.requiresBinding && bindingStatus != BindingPreparationStatus.Bound) {
-                            if (!isVerifyingBinding) {
-                                isVerifyingBinding = true
-                                unavailableMessage = "正在确认老人设备绑定状态…"
-                                onVerifyBinding { isBound ->
-                                    isVerifyingBinding = false
-                                    if (isBound) {
-                                        unavailableMessage = null
-                                        action.onClick?.invoke()
-                                    } else {
-                                        unavailableMessage =
-                                            "尚未确认老人设备已绑定，请完成绑定后再试。"
+            items(
+                items = actions.chunked(FAMILY_FEATURE_COLUMN_COUNT),
+                key = { row -> row.joinToString(separator = "|") { it.title } },
+            ) { rowActions ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(ElderSpacing.medium),
+                ) {
+                    rowActions.forEach { action ->
+                        FamilyFeatureCard(
+                            action = action,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                if (
+                                    action.requiresBinding &&
+                                    bindingStatus != BindingPreparationStatus.Bound
+                                ) {
+                                    if (!isVerifyingBinding) {
+                                        isVerifyingBinding = true
+                                        unavailableMessage = "正在确认老人设备绑定状态…"
+                                        onVerifyBinding { isBound ->
+                                            isVerifyingBinding = false
+                                            if (isBound) {
+                                                unavailableMessage = null
+                                                action.onClick?.invoke()
+                                            } else {
+                                                unavailableMessage =
+                                                    "尚未确认老人设备已绑定，请完成绑定后再试。"
+                                            }
+                                        }
                                     }
+                                } else if (action.onClick != null) {
+                                    action.onClick.invoke()
+                                } else {
+                                    unavailableMessage = "${action.title}接口尚未进入当前开发阶段。"
                                 }
-                            }
-                        } else if (action.onClick != null) {
-                            action.onClick.invoke()
-                        } else {
-                            unavailableMessage = "${action.title}接口尚未进入当前开发阶段。"
-                        }
-                    },
-                )
+                            },
+                        )
+                    }
+                    repeat(FAMILY_FEATURE_COLUMN_COUNT - rowActions.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
             }
             item { Spacer(modifier = Modifier.height(ElderSpacing.large)) }
         }
@@ -475,22 +480,25 @@ private fun ElderProfileCard(
 }
 
 @Composable
-private fun FamilyFeatureCard(action: FamilyFeatureAction, onClick: () -> Unit) {
+private fun FamilyFeatureCard(
+    action: FamilyFeatureAction,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .defaultMinSize(minHeight = 96.dp)
-            .semantics { contentDescription = "${action.title}，${action.subtitle}" }
+        modifier = modifier
+            .height(112.dp)
+            .semantics { contentDescription = action.title }
             .clickable(onClickLabel = "打开${action.title}", onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
-        Row(
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .padding(ElderSpacing.medium),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(ElderSpacing.medium),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
             Icon(
                 imageVector = action.icon,
@@ -498,10 +506,14 @@ private fun FamilyFeatureCard(action: FamilyFeatureAction, onClick: () -> Unit) 
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(40.dp),
             )
-            Column {
-                Text(action.title, style = MaterialTheme.typography.titleLarge)
-                Text(action.subtitle, style = MaterialTheme.typography.bodyMedium)
-            }
+            Spacer(modifier = Modifier.height(ElderSpacing.small))
+            Text(
+                text = action.title,
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }
+
+private const val FAMILY_FEATURE_COLUMN_COUNT = 2

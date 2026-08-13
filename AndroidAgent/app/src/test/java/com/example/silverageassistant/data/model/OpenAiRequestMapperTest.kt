@@ -22,7 +22,7 @@ class OpenAiRequestMapperTest {
     fun llamaRequest_containsOnlySelectedSamplingAndDisablesThinking() {
         val payload = OpenAiRequestMapper(
             ModelServiceConfig(
-                baseUrl = "http://58.199.163.98:11435",
+                baseUrl = "https://model-provider.example.invalid",
                 model = "qwen3_5",
                 dialect = OpenAiCompatibleDialect.LlamaCpp,
             ),
@@ -76,13 +76,13 @@ class OpenAiRequestMapperTest {
     @Test
     fun baseUrl_withoutV1_isNormalized() {
         val config = ModelServiceConfig(
-            baseUrl = "http://58.199.163.98:11435/",
+            baseUrl = "https://model-provider.example.invalid/",
             model = "qwen3_5",
             dialect = OpenAiCompatibleDialect.LlamaCpp,
         )
 
         assertEquals(
-            "http://58.199.163.98:11435/v1/chat/completions",
+            "https://model-provider.example.invalid/v1/chat/completions",
             config.chatCompletionsUrl,
         )
     }

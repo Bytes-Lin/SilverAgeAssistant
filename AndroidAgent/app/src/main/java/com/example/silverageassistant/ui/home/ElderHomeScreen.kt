@@ -59,6 +59,7 @@ import androidx.core.content.ContextCompat
 import com.example.silverageassistant.ui.components.ElderScreenScaffold
 import com.example.silverageassistant.ui.onboarding.SessionConnectionStatus
 import com.example.silverageassistant.ui.reminders.ReminderItemUi
+import com.example.silverageassistant.ui.reminders.ReminderStatus
 import com.example.silverageassistant.ui.theme.ElderSpacing
 import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
 import java.time.LocalDate
@@ -169,7 +170,12 @@ fun ElderHomeScreen(
         SessionConnectionStatus.Invalid -> "请联系家属重新完成绑定。"
         SessionConnectionStatus.Unknown -> "系统尚未取得绑定状态，请稍后再查看。"
     }
-    val latestReminder = todayReminders.maxByOrNull(ReminderItemUi::eventTimeEpochMillis)
+    // 首页只提示仍需老人处理的待办；已确认完成的提醒继续保留在今日提醒页，
+    // 但不能再占用首页的最近提醒卡片。稍后提醒仍属于未完成待办。
+    val latestReminder = todayReminders
+        .asSequence()
+        .filter { it.status != ReminderStatus.Completed }
+        .maxByOrNull(ReminderItemUi::eventTimeEpochMillis)
     val actions = listOf(
         HomeAction("和我说话", Icons.AutoMirrored.Rounded.Chat, onClick = onConversation),
         HomeAction("今日提醒", Icons.Rounded.NotificationsActive, onClick = onReminders),
@@ -261,7 +267,7 @@ fun ElderHomeScreen(
                         )
                         if (latestReminder == null) {
                             Text(
-                                text = "当前没有提醒",
+                                text = "暂无要完成的提醒待办",
                                 style = MaterialTheme.typography.bodyLarge,
                             )
                         } else {

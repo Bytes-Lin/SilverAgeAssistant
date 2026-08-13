@@ -1,8 +1,9 @@
 package com.example.silverageassistant
 
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -42,8 +43,8 @@ class GuiTaskControlBarTest {
         }
 
         composeRule.onNodeWithText("返回任务").assertIsDisplayed().performClick()
-        composeRule.onNodeWithTag(GuiTaskControlTestTags.VOICE_BUTTON)
-            .assertDoesNotExist()
+        composeRule.onAllNodesWithTag(GuiTaskControlTestTags.VOICE_BUTTON)
+            .assertCountEquals(0)
         assertEquals(1, resumed.get())
     }
 

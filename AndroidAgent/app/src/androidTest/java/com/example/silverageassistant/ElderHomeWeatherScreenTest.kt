@@ -1,8 +1,10 @@
 package com.example.silverageassistant
 
 import androidx.activity.compose.setContent
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import com.example.silverageassistant.domain.weather.CurrentWeather
 import com.example.silverageassistant.domain.weather.DailyWeather
@@ -10,6 +12,7 @@ import com.example.silverageassistant.domain.weather.WeatherSnapshot
 import com.example.silverageassistant.ui.home.ElderHomeScreen
 import com.example.silverageassistant.ui.home.HomeWeatherUiState
 import com.example.silverageassistant.ui.reminders.ReminderItemUi
+import com.example.silverageassistant.ui.reminders.ReminderStatus
 import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
 import java.time.Instant
 import java.time.LocalDate
@@ -72,7 +75,74 @@ class ElderHomeWeatherScreenTest {
             }
         }
 
-        composeRule.onNodeWithText("当前没有提醒").assertIsDisplayed()
+        composeRule.onNodeWithText("暂无要完成的提醒待办").assertIsDisplayed()
+    }
+
+    @Test
+    fun allTodayRemindersCompleted_showsNoPendingTodo() {
+        composeRule.runOnUiThread {
+            composeRule.activity.setContent {
+                SilverAgeAssistantTheme {
+                    ElderHomeScreen(
+                        onConversation = {},
+                        onReminders = {},
+                        onFamilyContacts = {},
+                        onNews = {},
+                        onSettings = {},
+                        todayReminders = listOf(
+                            ReminderItemUi(
+                                id = "completed-reminder",
+                                eventTimeEpochMillis = 3L,
+                                time = "下午 4:00",
+                                title = "已经完成的待办",
+                                detail = "不应继续显示在首页。",
+                                status = ReminderStatus.Completed,
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("暂无要完成的提醒待办").assertIsDisplayed()
+        composeRule.onAllNodesWithText("下午 4:00 已经完成的待办").assertCountEquals(0)
+    }
+
+    @Test
+    fun completedNewerReminder_doesNotHideLatestPendingTodo() {
+        composeRule.runOnUiThread {
+            composeRule.activity.setContent {
+                SilverAgeAssistantTheme {
+                    ElderHomeScreen(
+                        onConversation = {},
+                        onReminders = {},
+                        onFamilyContacts = {},
+                        onNews = {},
+                        onSettings = {},
+                        todayReminders = listOf(
+                            ReminderItemUi(
+                                id = "pending-reminder",
+                                eventTimeEpochMillis = 2L,
+                                time = "下午 3:00",
+                                title = "尚未完成的待办",
+                                detail = "请按时完成。",
+                            ),
+                            ReminderItemUi(
+                                id = "completed-reminder",
+                                eventTimeEpochMillis = 3L,
+                                time = "下午 4:00",
+                                title = "已经完成的待办",
+                                detail = "不应继续显示在首页。",
+                                status = ReminderStatus.Completed,
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("下午 3:00 尚未完成的待办").assertIsDisplayed()
+        composeRule.onAllNodesWithText("下午 4:00 已经完成的待办").assertCountEquals(0)
     }
 
     private fun weatherSnapshot() = WeatherSnapshot(

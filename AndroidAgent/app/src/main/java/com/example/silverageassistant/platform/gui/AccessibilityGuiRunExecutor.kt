@@ -1,6 +1,7 @@
 package com.example.silverageassistant.platform.gui
 
 import com.example.silverageassistant.domain.agent.AgentToolRegistry
+import com.example.silverageassistant.domain.gui.GuiDeviceAction
 import com.example.silverageassistant.domain.gui.GuiDeviceActionResult
 import com.example.silverageassistant.domain.gui.GuiDeviceActionAuthorization
 import com.example.silverageassistant.domain.gui.GuiConfirmationScope
@@ -26,8 +27,9 @@ import com.example.silverageassistant.domain.voice.VoiceInteractionCoordinator
 import kotlinx.coroutines.delay
 
 /**
- * GUI Worker 的轻量级 ReAct 循环。一次只允许一个真实动作，然后强制重新截图；模型异常、
- * 过期帧和动作失败只消耗本 GuiRun 的步骤预算，整个 Run 耗尽后才交给任务管理器计为一次失败。
+ * GUI Worker 的轻量级 ReAct 循环。一次只允许一个真实动作，然后强制重新截图。正常页面推进
+ * 不设固定总步数上限；只有同一页面上的同一步骤已经尝试五次、再次重复仍无进展，才把本次
+ * GuiRun 交给任务管理器计为一次失败。
  */
 class AccessibilityGuiRunExecutor(
     private val launcher: GuiTargetAppLauncher,
@@ -156,13 +158,14 @@ class AccessibilityGuiRunExecutor(
         firstObservation: GuiObserveResult,
     ): GuiRunOutcome {
         val history = ArrayDeque<GuiStepRecord>()
-        var consecutiveActionFailures = 0
+        val repeatedStepGuard = RepeatedStepGuard()
         var orderSubmissionApproved = false
         var successfulDeviceActions = 0
         var awaitingPostActionObservation = false
         var hasVerifiedAfterAction = false
         var pendingObservation: GuiObserveResult? = firstObservation
-        for (step in 1..MAX_REACT_STEPS) {
+        var step = 1
+        while (true) {
             control.awaitRunning()
             control.reportPhase(
                 GuiRunPhase.RUNNING,
@@ -205,6 +208,8 @@ class AccessibilityGuiRunExecutor(
                         history,
                         GuiStepRecord("安全页面", "已交给老人亲自操作"),
                     )
+                    repeatedStepGuard.resetForNewUserInput()
+                    step++
                     continue
                 }
 
@@ -214,6 +219,7 @@ class AccessibilityGuiRunExecutor(
                         hasVerifiedAfterAction = true
                     }
                     control.consumeVoiceInput()?.let { transcript ->
+                        repeatedStepGuard.resetForNewUserInput()
                         addHistory(
                             history,
                             GuiStepRecord("老人语音补充", transcript),
@@ -232,6 +238,10 @@ class AccessibilityGuiRunExecutor(
                             ),
                         )
                     }.getOrElse { error ->
+                        val repeatedAttempts = repeatedStepGuard.register(
+                            pageFingerprint = captured.observation.repeatPageFingerprint(),
+                            stepFingerprint = "planner_error",
+                        )
                         addHistory(
                             history,
                             GuiStepRecord(
@@ -239,11 +249,11 @@ class AccessibilityGuiRunExecutor(
                                 error.message?.take(120) ?: "模型分析失败",
                             ),
                         )
-                        consecutiveActionFailures++
-                        if (consecutiveActionFailures >= MAX_CONSECUTIVE_FAILURES) {
-                            return GuiRunOutcome.Failed("模型连续无法给出有效的页面操作")
+                        if (repeatedAttempts > MAX_REPEATED_STEP_ATTEMPTS) {
+                            return repeatedStepFailure()
                         }
                         delay(RETRY_DELAY_MILLIS)
+                        step++
                         continue
                     }
                     GuiDebugTrace.record(
@@ -253,6 +263,29 @@ class AccessibilityGuiRunExecutor(
                         planned.toString(),
                     )
                     control.awaitRunning()
+                    val repeatedAttempts = repeatedStepGuard.register(
+                        pageFingerprint = captured.observation.repeatPageFingerprint(),
+                        stepFingerprint = planned.repeatStepFingerprint(
+                            captured.observation,
+                        ),
+                    )
+                    if (repeatedAttempts > 1) {
+                        GuiDebugTrace.record(
+                            "react",
+                            "repeated_step_attempt",
+                            "同一页面步骤第 $repeatedAttempts 次尝试",
+                            "step=$step\naction=${planned::class.simpleName}",
+                        )
+                    }
+                    if (repeatedAttempts > MAX_REPEATED_STEP_ATTEMPTS) {
+                        GuiDebugTrace.record(
+                            "react",
+                            "repeated_step_limit",
+                            "同一页面步骤已尝试 $MAX_REPEATED_STEP_ATTEMPTS 次仍无进展",
+                            "step=$step\naction=${planned::class.simpleName}",
+                        )
+                        return repeatedStepFailure()
+                    }
                     when (planned) {
                         is GuiPlannedAction.Complete -> {
                             if (successfulDeviceActions == 0 || !hasVerifiedAfterAction) {
@@ -262,7 +295,6 @@ class AccessibilityGuiRunExecutor(
                                     "没有真实动作或动作后新截图，拒绝 complete",
                                     planned.summary,
                                 )
-                                consecutiveActionFailures++
                                 addHistory(
                                     history,
                                     GuiStepRecord(
@@ -270,14 +302,7 @@ class AccessibilityGuiRunExecutor(
                                         "拒绝：必须先执行真实操作，再用新截图验证结果",
                                     ),
                                 )
-                                if (
-                                    consecutiveActionFailures >=
-                                    MAX_CONSECUTIVE_FAILURES
-                                ) {
-                                    return GuiRunOutcome.Failed(
-                                        "模型没有根据真实页面完成操作验证",
-                                    )
-                                }
+                                step++
                                 continue
                             }
                             GuiDebugTrace.record(
@@ -289,8 +314,16 @@ class AccessibilityGuiRunExecutor(
                             return GuiRunOutcome.Completed
                         }
 
-                        is GuiPlannedAction.Fail ->
-                            return GuiRunOutcome.Failed(planned.message)
+                        is GuiPlannedAction.Fail -> {
+                            addHistory(
+                                history,
+                                GuiStepRecord(
+                                    "模型认为当前步骤无法继续",
+                                    "尚未达到重复失败阈值，将重新观察并尝试其他方案",
+                                ),
+                            )
+                            delay(RETRY_DELAY_MILLIS)
+                        }
 
                         is GuiPlannedAction.Wait -> {
                             addHistory(
@@ -306,7 +339,6 @@ class AccessibilityGuiRunExecutor(
                                 successfulDeviceActions == 0 &&
                                 !captured.observation.hasVisibleUserBlocker()
                             ) {
-                                consecutiveActionFailures++
                                 addHistory(
                                     history,
                                     GuiStepRecord(
@@ -314,14 +346,7 @@ class AccessibilityGuiRunExecutor(
                                         "拒绝：当前页面没有需要老人决定的阻塞项，请继续按原目标操作",
                                     ),
                                 )
-                                if (
-                                    consecutiveActionFailures >=
-                                    MAX_CONSECUTIVE_FAILURES
-                                ) {
-                                    return GuiRunOutcome.Failed(
-                                        "模型没有根据当前页面继续执行",
-                                    )
-                                }
+                                step++
                                 continue
                             }
                             voiceCoordinator?.speakGuiAgentConfirmation(
@@ -343,7 +368,6 @@ class AccessibilityGuiRunExecutor(
 
                         is GuiPlannedAction.ReadyForPayment -> {
                             if (successfulDeviceActions == 0) {
-                                consecutiveActionFailures++
                                 addHistory(
                                     history,
                                     GuiStepRecord(
@@ -351,14 +375,7 @@ class AccessibilityGuiRunExecutor(
                                         "拒绝：尚未执行页面操作，当前没有付款完成证据",
                                     ),
                                 )
-                                if (
-                                    consecutiveActionFailures >=
-                                    MAX_CONSECUTIVE_FAILURES
-                                ) {
-                                    return GuiRunOutcome.Failed(
-                                        "模型在没有页面依据时尝试进入付款流程",
-                                    )
-                                }
+                                step++
                                 continue
                             }
                             voiceCoordinator?.speakGuiAgentConfirmation(
@@ -422,7 +439,6 @@ class AccessibilityGuiRunExecutor(
                             orderSubmissionApproved = false
                             when (result) {
                                 is GuiDeviceActionResult.Success -> {
-                                    consecutiveActionFailures = 0
                                     successfulDeviceActions++
                                     awaitingPostActionObservation = true
                                     hasVerifiedAfterAction = false
@@ -434,7 +450,6 @@ class AccessibilityGuiRunExecutor(
                                 }
 
                                 is GuiDeviceActionResult.Rejected -> {
-                                    consecutiveActionFailures++
                                     addHistory(
                                         history,
                                         GuiStepRecord(planned.summary, result.message),
@@ -442,25 +457,24 @@ class AccessibilityGuiRunExecutor(
                                 }
 
                                 is GuiDeviceActionResult.Failed -> {
-                                    consecutiveActionFailures++
                                     addHistory(
                                         history,
                                         GuiStepRecord(planned.summary, result.message),
                                     )
                                 }
                             }
-                            if (consecutiveActionFailures >= MAX_CONSECUTIVE_FAILURES) {
-                                return GuiRunOutcome.Failed("连续多次无法执行页面操作")
-                            }
                         }
                     }
                 }
             }
+            step++
         }
-        return GuiRunOutcome.Failed(
-            "GUI Agent 已达到本次运行的 $MAX_REACT_STEPS 个 ReAct 步骤限制",
-        )
     }
+
+    private fun repeatedStepFailure(): GuiRunOutcome.Failed =
+        GuiRunOutcome.Failed(
+            "同一页面步骤已尝试 $MAX_REPEATED_STEP_ATTEMPTS 次仍未解决",
+        )
 
     private suspend fun awaitTargetObservation(
         controller: GuiDeviceController,
@@ -528,6 +542,93 @@ class AccessibilityGuiRunExecutor(
         return VISIBLE_USER_BLOCKERS.any(visibleText::contains)
     }
 
+    private fun GuiScreenObservation.repeatPageFingerprint(): String = buildString {
+        append(targetPackage)
+        append('|')
+        append(windowTitle.orEmpty().normalizeForRepeatFingerprint())
+        nodes.asSequence()
+            .filter {
+                it.clickable ||
+                    it.editable ||
+                    it.scrollable ||
+                    !it.text.isNullOrBlank() ||
+                    !it.contentDescription.isNullOrBlank() ||
+                    !it.viewId.isNullOrBlank()
+            }
+            .map { node ->
+                buildString {
+                    append(node.text.orEmpty().normalizeForRepeatFingerprint())
+                    append('~')
+                    append(node.contentDescription.orEmpty().normalizeForRepeatFingerprint())
+                    append('~')
+                    append(node.viewId.orEmpty())
+                    append('~')
+                    append(node.className.orEmpty())
+                    append('~')
+                    append((node.boundsInScreen.left / REPEAT_BOUNDS_BUCKET_PX).toInt())
+                    append(',')
+                    append((node.boundsInScreen.top / REPEAT_BOUNDS_BUCKET_PX).toInt())
+                    append('~')
+                    append(if (node.clickable) 'c' else '-')
+                    append(if (node.editable) 'e' else '-')
+                    append(if (node.scrollable) 's' else '-')
+                }
+            }
+            .sorted()
+            .take(MAX_REPEAT_FINGERPRINT_NODES)
+            .forEach { nodeFingerprint ->
+                append('|')
+                append(nodeFingerprint)
+            }
+    }.hashCode().toString()
+
+    private fun GuiPlannedAction.repeatStepFingerprint(
+        observation: GuiScreenObservation,
+    ): String = when (this) {
+        is GuiPlannedAction.Complete ->
+            "complete:${summary.normalizeForRepeatFingerprint()}"
+        is GuiPlannedAction.Fail ->
+            "fail:${message.normalizeForRepeatFingerprint()}"
+        is GuiPlannedAction.Wait ->
+            "wait:${reason.normalizeForRepeatFingerprint()}"
+        is GuiPlannedAction.AskElder ->
+            "ask_elder:$confirmationScope:${message.normalizeForRepeatFingerprint()}"
+        is GuiPlannedAction.ReadyForPayment ->
+            "ready_for_payment:${message.normalizeForRepeatFingerprint()}"
+        is GuiPlannedAction.UseTool -> "use_tool:$toolName:${argumentsJson.hashCode()}"
+        is GuiPlannedAction.Device -> when (val deviceAction = action) {
+            is GuiDeviceAction.ClickNode -> {
+                val target = observation.nodes.firstOrNull {
+                    it.nodeId == deviceAction.nodeId
+                }
+                "click_node:" + listOfNotNull(
+                    target?.text,
+                    target?.contentDescription,
+                    target?.viewId,
+                    summary,
+                ).joinToString("|") { it.normalizeForRepeatFingerprint() }
+            }
+            is GuiDeviceAction.ClickPoint -> {
+                val point = deviceAction.point
+                "click_point:${point.coordinateSpace}:" +
+                    "${(point.x / REPEAT_COORDINATE_BUCKET).toInt()}:" +
+                    "${(point.y / REPEAT_COORDINATE_BUCKET).toInt()}:" +
+                    summary.normalizeForRepeatFingerprint()
+            }
+            is GuiDeviceAction.InputText ->
+                "input_text:${deviceAction.text.hashCode()}:" +
+                    summary.normalizeForRepeatFingerprint()
+            is GuiDeviceAction.InputTextFocused ->
+                "input_text_focused:${deviceAction.text.hashCode()}"
+            is GuiDeviceAction.Scroll ->
+                "scroll:${deviceAction.direction}:" + summary.normalizeForRepeatFingerprint()
+            is GuiDeviceAction.Back -> "back"
+        }
+    }
+
+    private fun String.normalizeForRepeatFingerprint(): String =
+        lowercase().replace(Regex("\\s+"), " ").trim().take(MAX_REPEAT_TEXT_LENGTH)
+
     private fun GuiObserveResult.debugSummary(): String = when (this) {
         is GuiObserveResult.Captured ->
             "已捕获 frame=${observation.geometry.frameId.take(8)}，" +
@@ -543,10 +644,14 @@ class AccessibilityGuiRunExecutor(
     }
 
     private companion object {
-        const val MAX_REACT_STEPS = 5
-        const val MAX_CONSECUTIVE_FAILURES = 5
+        const val MAX_REPEATED_STEP_ATTEMPTS = 5
         const val MAX_LOCAL_HISTORY_STEPS = 8
         const val MAX_HISTORY_RESULT_LENGTH = 300
+        const val MAX_REPEAT_FINGERPRINT_NODES = 120
+        const val MAX_REPEAT_TEXT_LENGTH = 120
+        const val MAX_TRACKED_PAGE_STEPS = 64
+        const val REPEAT_BOUNDS_BUCKET_PX = 24.0
+        const val REPEAT_COORDINATE_BUCKET = 25.0
         const val TARGET_FOREGROUND_POLLS = 12
         const val TARGET_FOREGROUND_POLL_MILLIS = 500L
         const val AFTER_ACTION_DELAY_MILLIS = 700L
@@ -558,5 +663,27 @@ class AccessibilityGuiRunExecutor(
             "隐私协议",
             "同意并继续",
         )
+    }
+
+    private class RepeatedStepGuard {
+        private val attemptsByPageAndStep = linkedMapOf<String, Int>()
+
+        fun register(pageFingerprint: String, stepFingerprint: String): Int {
+            val key = "$pageFingerprint|$stepFingerprint"
+            if (
+                key !in attemptsByPageAndStep &&
+                attemptsByPageAndStep.size >= MAX_TRACKED_PAGE_STEPS
+            ) {
+                val oldestKey = attemptsByPageAndStep.keys.firstOrNull()
+                if (oldestKey != null) attemptsByPageAndStep.remove(oldestKey)
+            }
+            val attempts = attemptsByPageAndStep.getOrDefault(key, 0) + 1
+            attemptsByPageAndStep[key] = attempts
+            return attempts
+        }
+
+        fun resetForNewUserInput() {
+            attemptsByPageAndStep.clear()
+        }
     }
 }

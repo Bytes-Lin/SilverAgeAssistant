@@ -1,7 +1,11 @@
 package com.example.silverageassistant.ui.conversation
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
+import android.view.View
+import android.view.inputmethod.InputMethodManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -47,13 +51,18 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -72,6 +81,7 @@ import com.example.silverageassistant.ui.components.ElderScreenScaffold
 import com.example.silverageassistant.ui.components.LargeActionButton
 import com.example.silverageassistant.ui.theme.ElderSpacing
 import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
+import kotlinx.coroutines.delay
 
 object ConversationTestTags {
     const val MESSAGE_LIST = "conversation_message_list"
@@ -341,6 +351,36 @@ private fun ConversationComposer(
 ) {
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val composeView = LocalView.current
+    var inputActivationRequest by remember { mutableIntStateOf(0) }
+    var requestedInputMode by remember { mutableStateOf(uiState.inputMode) }
+
+    // requestFocus、显示输入法和启动原生手写不能挤在按钮的同一个点击帧中：
+    // Compose 此时可能还没有建立 InputConnection，系统会静默忽略手写请求。
+    // 这里等待编辑器真正激活，让老人一次点击即可进入设备支持的输入模式。
+    LaunchedEffect(inputActivationRequest) {
+        if (inputActivationRequest == 0 || uiState.phase != ConversationPhase.Idle) return@LaunchedEffect
+        focusRequester.requestFocus()
+        withFrameNanos { }
+        when (requestedInputMode) {
+            ConversationInputMode.Keyboard -> {
+                restartKeyboardInput(composeView)
+                withFrameNanos { }
+                keyboardController?.show()
+            }
+            ConversationInputMode.Handwriting -> {
+                keyboardController?.show()
+                requestNativeHandwritingWhenReady(composeView)
+            }
+        }
+    }
+
+    fun activateInput(mode: ConversationInputMode) {
+        requestedInputMode = mode
+        onInputModeChange(mode)
+        inputActivationRequest += 1
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -355,22 +395,14 @@ private fun ConversationComposer(
                 text = "打字",
                 selected = uiState.inputMode == ConversationInputMode.Keyboard,
                 icon = Icons.Rounded.Keyboard,
-                onClick = {
-                    onInputModeChange(ConversationInputMode.Keyboard)
-                    focusRequester.requestFocus()
-                    keyboardController?.show()
-                },
+                onClick = { activateInput(ConversationInputMode.Keyboard) },
                 modifier = Modifier.weight(1f),
             )
             InputModeButton(
                 text = "手写",
                 selected = uiState.inputMode == ConversationInputMode.Handwriting,
                 icon = Icons.Rounded.Draw,
-                onClick = {
-                    onInputModeChange(ConversationInputMode.Handwriting)
-                    focusRequester.requestFocus()
-                    keyboardController?.show()
-                },
+                onClick = { activateInput(ConversationInputMode.Handwriting) },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -397,7 +429,7 @@ private fun ConversationComposer(
             supportingText = {
                 Text(
                     if (uiState.inputMode == ConversationInputMode.Handwriting) {
-                        "请在手机键盘中切换到“手写”，识别结果会显示在这里。"
+                        "系统输入法已打开；支持原生手写时会直接进入手写。"
                     } else {
                         "输入完成后，点右边的发送按钮。"
                     },
@@ -434,6 +466,45 @@ private fun ConversationComposer(
         )
     }
 }
+
+/**
+ * 切回打字时重启 InputConnection。Android 框架会结束当前 stylus handwriting
+ * session，避免老人点击“打字”后仍停留在上一轮手写会话。
+ */
+private fun restartKeyboardInput(view: View) {
+    val inputMethodManager = view.context.getSystemService(Context.INPUT_METHOD_SERVICE)
+        as? InputMethodManager ?: return
+    runCatching { inputMethodManager.restartInput(view) }
+}
+
+/**
+ * Android 不允许普通应用强制切换第三方输入法的私有“拼音/手写”子模式。
+ * Android 13+ 且当前输入法支持系统 stylus handwriting 协议时，可以请求原生
+ * 手写会话。请求前最多等待约 500ms，直到 Compose 根视图已取得窗口焦点且
+ * InputConnection 激活，避免过早调用被系统静默忽略。
+ */
+private suspend fun requestNativeHandwritingWhenReady(view: View) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    val inputMethodManager = view.context.getSystemService(Context.INPUT_METHOD_SERVICE)
+        as? InputMethodManager ?: return
+
+    var inputConnectionReady = view.hasWindowFocus() && inputMethodManager.isActive(view)
+    repeat(INPUT_CONNECTION_WAIT_ATTEMPTS) {
+        if (inputConnectionReady) return@repeat
+        delay(INPUT_CONNECTION_WAIT_MILLIS)
+        inputConnectionReady = view.hasWindowFocus() && inputMethodManager.isActive(view)
+    }
+
+    if (!inputConnectionReady) return
+    val handwritingAvailable = Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+        inputMethodManager.isStylusHandwritingAvailable
+    if (handwritingAvailable) {
+        runCatching { inputMethodManager.startStylusHandwriting(view) }
+    }
+}
+
+private const val INPUT_CONNECTION_WAIT_ATTEMPTS = 10
+private const val INPUT_CONNECTION_WAIT_MILLIS = 50L
 
 @Composable
 private fun InputModeButton(

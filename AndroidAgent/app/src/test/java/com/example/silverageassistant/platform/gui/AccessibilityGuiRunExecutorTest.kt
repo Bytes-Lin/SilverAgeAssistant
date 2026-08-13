@@ -35,15 +35,15 @@ import org.junit.Test
 
 class AccessibilityGuiRunExecutorTest {
     @Test
-    fun reactRun_returnsFailureAfterFiveSteps() = runBlocking {
+    fun reactRun_returnsFailureWhenSameStepIsRepeatedMoreThanFiveTimes() = runBlocking {
         val controller = FakeController(
             observations = ArrayDeque(
-                (1..5).map { GuiObserveResult.Captured(observation("frame-$it")) },
+                (1..6).map { GuiObserveResult.Captured(observation("frame-$it")) },
             ),
         )
         val planner = QueuePlanner(
             ArrayDeque(
-                (1..5).map {
+                (1..6).map {
                     GuiPlannedAction.Wait(milliseconds = 0, reason = "等待页面")
                 },
             ),
@@ -56,7 +56,49 @@ class AccessibilityGuiRunExecutorTest {
         )
 
         assertTrue(outcome is GuiRunOutcome.Failed)
-        assertEquals(5, controller.observeCount)
+        assertEquals(6, controller.observeCount)
+    }
+
+    @Test
+    fun reactRun_allowsMoreThanFiveStepsWhenPageKeepsProgressing() = runBlocking {
+        val actionCount = 7
+        val controller = FakeController(
+            observations = ArrayDeque(
+                (1..(actionCount + 1)).map { index ->
+                    GuiObserveResult.Captured(
+                        observation(
+                            frameId = "frame-$index",
+                            nodeText = "页面-$index",
+                        ),
+                    )
+                },
+            ),
+        )
+        val planner = QueuePlanner(
+            ArrayDeque(
+                buildList {
+                    repeat(actionCount) { index ->
+                        add(
+                            GuiPlannedAction.Device(
+                                GuiDeviceAction.ClickNode("frame-${index + 1}", "0.1"),
+                                "前往第 ${index + 2} 个页面",
+                            ),
+                        )
+                    }
+                    add(GuiPlannedAction.Complete("已在新页面验证任务完成"))
+                },
+            ),
+        )
+
+        val outcome = executor(controller, planner).execute(
+            GuiRunRequest("todo-progress", "在美团搜索午餐", 1),
+            FakeControl(),
+            AgentToolRegistry(emptyList()),
+        )
+
+        assertEquals(GuiRunOutcome.Completed, outcome)
+        assertEquals(actionCount + 1, controller.observeCount)
+        assertEquals(actionCount, controller.actions.size)
     }
 
     @Test
@@ -240,7 +282,10 @@ class AccessibilityGuiRunExecutorTest {
         }
     }
 
-    private fun observation(frameId: String): GuiScreenObservation {
+    private fun observation(
+        frameId: String,
+        nodeText: String = "搜索",
+    ): GuiScreenObservation {
         val captureSize = PixelSize(1080, 2400)
         val modelImage = ScreenshotResizePlanner.plan(
             captureSize = captureSize,
@@ -264,7 +309,7 @@ class AccessibilityGuiRunExecutorTest {
             nodes = listOf(
                 GuiNodeSnapshot(
                     nodeId = "0.1",
-                    text = "搜索",
+                    text = nodeText,
                     contentDescription = null,
                     className = "android.widget.Button",
                     viewId = null,

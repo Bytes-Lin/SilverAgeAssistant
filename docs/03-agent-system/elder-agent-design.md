@@ -143,8 +143,9 @@ GUI Agent 是主聊天 Agent 可调用的异步 Tool，但不在主聊天模型�
 - `GuiRun`、页面状态和动作循环只存在于当前进程内。新进程发现遗留
   `RUNNING/PAUSED` Todo 时只转换为 `INTERRUPTED` 并提醒重新开始，不恢复旧动作；
 - 同一设备只允许一个非终态 GUI 任务；第二个任务返回忙碌状态；
-- 第一次完整 GuiRun 耗尽自身 ReAct/重规划预算后先告知老人，再自动创建第二次完整
-  GuiRun；第二次运行先回到桌面并用 `NEW_TASK + CLEAR_TASK + CLEAR_TOP` 清理目标 App
+- 第一次完整 GuiRun 在同一页面的同一步骤重复超过 5 次，或遇到其他不可恢复错误后，先
+  告知老人，再自动创建第二次完整 GuiRun；第二次运行先回到桌面并用
+  `NEW_TASK + CLEAR_TASK + CLEAR_TOP` 清理目标 App
   的旧任务栈，然后重新打开入口页，不在第一次失败页面上续跑。这里重置的是 Android
   可见任务栈，不使用系统权限强制停止第三方 App 进程；暂停、取消、等待语音、离开目标
   App 和进程中断不计为完整失败；
@@ -224,8 +225,9 @@ Android 兼容实现需要区分：
 当前 Tool 已注册到正式聊天 Tool Registry。主 Agent 对打开或操作美团、微信、淘宝的单一
 及复合请求使用 `START`，Tool 创建 Todo 后立即返回，不阻塞聊天。`STARTED` 不代表任何
 页面结果，主 Agent 不得扩写为已经打开、点击或下单。纯打开请求只有在无障碍观察确认目标
-包处于前台后才完成；其他请求由 `AccessibilityGuiRunExecutor` 最多执行 5 个“观察—规划—单步
-动作—重新观察”步骤。无法识别、未安装、无障碍未启用或 Android 10 暂无截图能力属于
+包处于前台后才完成；其他请求由 `AccessibilityGuiRunExecutor` 持续执行“观察—规划—单步
+动作—重新观察”，正常页面推进不设固定总步数上限。同一页面的同一步骤允许尝试 5 次，
+第 6 次仍重复且没有页面进展时，本次完整 GuiRun 才判定失败。无法识别、未安装、无障碍未启用或 Android 10 暂无截图能力属于
 `UNAVAILABLE`，不计为完整运行失败，也不触发第二次尝试或家属通知。
 
 对包含受支持 App 名称和明确操作动词的指令，`GuiMainAgentToolRouter` 在调用主聊天模型前

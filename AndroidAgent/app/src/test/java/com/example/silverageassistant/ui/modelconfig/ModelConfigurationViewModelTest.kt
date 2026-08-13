@@ -27,7 +27,7 @@ class ModelConfigurationViewModelTest {
             allowCleartextHttp = true,
             externalScope = CoroutineScope(Dispatchers.Unconfined),
         )
-        viewModel.updateBaseUrl("http://58.199.163.98:11435/")
+        viewModel.updateBaseUrl("https://model-provider.example.invalid/")
         viewModel.updateModel("qwen3_5")
         viewModel.updateContextWindowTokens("65536")
         viewModel.updateMaxOutputTokens("768")
@@ -42,7 +42,7 @@ class ModelConfigurationViewModelTest {
 
         val request = requireNotNull(repository.lastRequest)
         assertEquals("elder-1", request.elderId)
-        assertEquals("http://58.199.163.98:11435", request.configuration.baseUrl)
+        assertEquals("https://model-provider.example.invalid", request.configuration.baseUrl)
         assertEquals(65536, request.configuration.contextWindowTokens)
         assertEquals(768, request.configuration.maxOutputTokens)
         assertEquals(0.7, request.configuration.temperature, 0.0)
@@ -122,7 +122,7 @@ class ModelConfigurationViewModelTest {
     }
 
     private fun configuration() = ModelRuntimeConfiguration(
-        baseUrl = "http://58.199.163.98:11435",
+        baseUrl = "https://model-provider.example.invalid",
         model = "qwen3_5",
         dialect = OpenAiCompatibleDialect.LlamaCpp,
     )

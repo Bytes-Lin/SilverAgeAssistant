@@ -154,8 +154,8 @@ Cache-Control: no-store
 {
   "configuration": {
     "schema_version": 1,
-    "base_url": "http://58.199.163.98:11435",
-    "model": "qwen3_5",
+    "base_url": "https://model-provider.example.invalid",
+    "model": "example-model",
     "dialect": "llama_cpp",
     "context_window_tokens": 32768,
     "max_output_tokens": 512,
@@ -213,8 +213,8 @@ Idempotency-Key: <client_request_id>
 ```json
 {
   "schema_version": 1,
-  "base_url": "http://58.199.163.98:11435",
-  "model": "qwen3_5",
+  "base_url": "https://model-provider.example.invalid",
+  "model": "example-model",
   "dialect": "llama_cpp",
   "context_window_tokens": 32768,
   "max_output_tokens": 512,

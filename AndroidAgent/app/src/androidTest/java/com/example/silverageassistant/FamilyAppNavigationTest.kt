@@ -1,7 +1,9 @@
 package com.example.silverageassistant
 
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -20,6 +22,8 @@ import com.example.silverageassistant.ui.onboarding.OnboardingTestTags
 import com.example.silverageassistant.ui.onboarding.OnboardingViewModel
 import com.example.silverageassistant.ui.theme.SilverAgeAssistantTheme
 import org.junit.Rule
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FamilyAppNavigationTest {
@@ -58,6 +62,20 @@ class FamilyAppNavigationTest {
         composeRule.onNodeWithText("已连接中台").assertIsDisplayed()
         composeRule.onNodeWithText("绑定码：654321").assertIsDisplayed()
         composeRule.onNodeWithText("王阿姨").assertIsDisplayed()
+        composeRule.onAllNodesWithText("家庭协助").assertCountEquals(0)
+        composeRule.onAllNodesWithText("查看老人今天的一般状态通知").assertCountEquals(0)
+        composeRule.onAllNodesWithText("给老人发送简短消息").assertCountEquals(0)
+        composeRule.onNodeWithText("状态检测").assertIsDisplayed()
+        composeRule.onAllNodesWithText("状态检测设置").assertCountEquals(0)
+
+        composeRule.onNodeWithText("今日状态").performScrollTo()
+        val todayStatusBounds = composeRule.onNodeWithText("今日状态")
+            .fetchSemanticsNode().boundsInRoot
+        val notificationBounds = composeRule.onNodeWithText("发送通知")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(todayStatusBounds.top, notificationBounds.top, 1f)
+        assertTrue(notificationBounds.left > todayStatusBounds.left)
+
         composeRule.onNodeWithText("重新生成绑定码").performScrollTo().performClick()
         composeRule.onNodeWithText("绑定码：112233").assertIsDisplayed()
     }

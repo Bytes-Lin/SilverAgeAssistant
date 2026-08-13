@@ -20,7 +20,7 @@ ASR、TTS 和图像能力可先使用 Mock Provider；本地服务器是否支�
 llama-server \
   -m /absolute/path/to/model.gguf \
   --host 0.0.0.0 \
-  --port 11435 \
+  --port <服务端口> \
   -c 8192 \
   --alias qwen3_5 \
   --jinja
@@ -29,24 +29,24 @@ llama-server \
 接口：
 
 ```text
-http://58.199.163.98:11435/v1/chat/completions
+https://model-provider.example.invalid/v1/chat/completions
 ```
 
 当前 Android Debug 默认访问：
 
 ```text
-http://58.199.163.98:11435
+https://model-provider.example.invalid
 ```
 
-模拟器和真机都需要能路由到该局域网地址，并确保服务监听 `0.0.0.0`、防火墙允许访问。若服务实际运行在模拟器宿主机，也可在未入库的 `AndroidAgent/dev.properties` 中覆盖为 `http://10.0.2.2:11435`。
+模拟器和真机都需要能路由到开发者自行配置的服务地址，并确保监听接口与防火墙规则允许访问。真实地址只写入未入库的 `AndroidAgent/dev.properties`。
 
 ## 3. Android Debug 配置
 
 Debug 构建使用 OpenAI-compatible Provider，默认模型为 `qwen3_5`。可在 `AndroidAgent/dev.properties` 中覆盖：
 
 ```properties
-modelBaseUrl=http://58.199.163.98:11435
-chatModel=qwen3_5
+modelBaseUrl=https://model-provider.example.invalid
+chatModel=example-model
 ```
 
 本地服务没有启用 API Key 时，Android 不发送 `Authorization`。正式云端服务的 Key 由老人设备本地加密凭证存储提供，不写入此配置文件。
@@ -58,7 +58,7 @@ chatModel=qwen3_5
 ## 5. 验证
 
 ```bash
-curl http://58.199.163.98:11435/v1/chat/completions \
+curl https://model-provider.example.invalid/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "qwen3_5",

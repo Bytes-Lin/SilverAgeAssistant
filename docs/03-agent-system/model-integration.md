@@ -61,8 +61,8 @@ TtsProvider
 开发服务器示例：
 
 ```text
-base_url = http://58.199.163.98:11435
-chat_model = qwen3_5
+base_url = https://model-provider.example.invalid
+chat_model = example-model
 dialect = llama_cpp
 ```
 

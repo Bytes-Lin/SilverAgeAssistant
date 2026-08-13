@@ -18,7 +18,7 @@ class ModelConfigurationStoreTest {
         val defaults = configuration(baseUrl = "http://default:11435", model = "default")
         val firstStore = JsonModelConfigurationStore(file, defaults, allowCleartextHttp = true)
         val saved = configuration(
-            baseUrl = "http://58.199.163.98:11435",
+            baseUrl = "https://model-provider.example.invalid",
             model = "qwen3_5",
         ).copy(
             revision = 3,
@@ -54,7 +54,7 @@ class ModelConfigurationStoreTest {
             {
               "schema_version": 1,
               "revision": 2,
-              "base_url": "http://58.199.163.98:11435",
+              "base_url": "https://model-provider.example.invalid",
               "model": "qwen3_5",
               "dialect": "llama_cpp",
               "max_output_tokens": 512,

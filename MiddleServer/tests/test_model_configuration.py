@@ -30,7 +30,7 @@ def model_configuration_payload(
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
-        "base_url": "http://58.199.163.98:11435",
+        "base_url": "https://model-provider.example.invalid",
         "model": "qwen3_5",
         "dialect": "llama_cpp",
         "context_window_tokens": 32768,
@@ -124,7 +124,7 @@ async def test_family_creates_and_both_sides_read_same_configuration(
     assert body == {
         "configuration": {
             "schema_version": 1,
-            "base_url": "http://58.199.163.98:11435",
+            "base_url": "https://model-provider.example.invalid",
             "model": "qwen3_5",
             "dialect": "llama_cpp",
             "context_window_tokens": 32768,

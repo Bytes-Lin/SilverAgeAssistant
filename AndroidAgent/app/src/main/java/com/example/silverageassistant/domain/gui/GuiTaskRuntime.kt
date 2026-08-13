@@ -55,7 +55,8 @@ sealed interface GuiRunOutcome {
     data class Unavailable(val message: String) : GuiRunOutcome
 
     /**
-     * 一个 Failure 表示整个 GuiRun 已耗尽自己的 ReAct/重规划预算，而不是单步失败。
+     * 一个 Failure 表示整个 GuiRun 在同一页面上的同一步骤重复超过允许次数，或遇到其他
+     * 无法恢复的运行错误，而不是普通单步失败。
      */
     data class Failed(val message: String) : GuiRunOutcome
 }

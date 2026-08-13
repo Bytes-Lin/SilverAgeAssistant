@@ -11,11 +11,22 @@ val developmentProperties = Properties().apply {
     if (file.exists()) file.inputStream().use(::load)
 }
 
+// Open-source artifacts must never inherit endpoints or feature flags from the
+// developer's ignored dev.properties file.
+val openSourceArtifact =
+    providers.gradleProperty("openSourceArtifact").orNull?.toBooleanStrictOrNull() ?: false
+
 fun buildConfigString(value: String): String =
     "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
+fun developmentStringProperty(name: String, defaultValue: String): String =
+    if (openSourceArtifact) defaultValue else developmentProperties.getProperty(name, defaultValue)
+
 fun developmentBooleanProperty(name: String, defaultValue: Boolean): Boolean =
-    developmentProperties.getProperty(name)
+    if (openSourceArtifact) {
+        defaultValue
+    } else {
+        developmentProperties.getProperty(name)
         ?.trim()
         ?.lowercase()
         ?.let { value ->
@@ -26,6 +37,7 @@ fun developmentBooleanProperty(name: String, defaultValue: Boolean): Boolean =
             }
         }
         ?: defaultValue
+    }
 
 android {
     namespace = "com.example.silverageassistant"
@@ -56,9 +68,9 @@ android {
                 "String",
                 "MIDDLE_SERVER_BASE_URL",
                 buildConfigString(
-                    developmentProperties.getProperty(
+                    developmentStringProperty(
                         "middleServerBaseUrl",
-                        "http://58.199.163.98:8765",
+                        "https://middle-server.example.invalid",
                     ),
                 ),
             )
@@ -66,9 +78,9 @@ android {
                 "String",
                 "MODEL_BASE_URL",
                 buildConfigString(
-                    developmentProperties.getProperty(
+                    developmentStringProperty(
                         "modelBaseUrl",
-                        "http://58.199.163.98:11435",
+                        "https://model-provider.example.invalid",
                     ),
                 ),
             )
@@ -76,7 +88,7 @@ android {
                 "String",
                 "CHAT_MODEL",
                 buildConfigString(
-                    developmentProperties.getProperty("chatModel", "qwen3_5"),
+                    developmentStringProperty("chatModel", "example-model"),
                 ),
             )
         }

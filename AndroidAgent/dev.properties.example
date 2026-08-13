@@ -1,6 +1,6 @@
 # Copy this file to dev.properties. dev.properties is ignored by Git.
-middleServerBaseUrl=http://58.199.163.98:8765
-modelBaseUrl=http://58.199.163.98:11435
-chatModel=qwen3_5
+middleServerBaseUrl=https://middle-server.example.invalid
+modelBaseUrl=https://model-provider.example.invalid
+chatModel=example-model
 # true: 显示并采集 GUI Agent 调试追踪；false: 正式体验模式（默认）。
 guiDebugEnabled=false
