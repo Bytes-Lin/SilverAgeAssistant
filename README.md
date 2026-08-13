@@ -85,7 +85,6 @@ SilverAgeAssistant/
 ├── MiddleServer/      FastAPI、SQLite、Alembic、REST/WebSocket 和测试
 ├── docs/              产品、架构、Android、Agent、接口、安全和路线图
 ├── scripts/           仓库检查和本地模型辅助脚本
-├── .codex/            Codex 项目配置
 ├── AGENTS.md          开发边界和协作规则
 └── README.md          项目入口
 ```
